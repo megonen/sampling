@@ -1,0 +1,1440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DA Sampling Calculator</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.10.3/Recharts.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { background: #0d1117; color: #e6edf3; font-family: 'Segoe UI', system-ui, sans-serif; }
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { opacity: 1; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0d1117; }
+    ::-webkit-scrollbar-thumb { background: #30363d; border-radius: 3px; }
+    #root { min-height: 100vh; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const {
+      useState, useMemo, useCallback
+    } = React;
+
+    const {
+      LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip,
+      Legend, ReferenceLine, ReferenceArea, ResponsiveContainer,
+      ComposedChart, Scatter
+    } = Recharts;
+
+    // ─── Math Utilities ──────────────────────────────────────────────────────────
+
+    function makeLogFact(maxN) {
+      const lf = new Float64Array(maxN + 2);
+      lf[0] = 0;
+      for (let i = 1; i <= maxN + 1; i++) lf[i] = lf[i - 1] + Math.log(i);
+      return lf;
+    }
+    function logBinom(n, k, lf) {
+      if (k < 0 || k > n || n < 0) return -Infinity;
+      if (k === 0 || k === n) return 0;
+      return lf[n] - lf[k] - lf[n - k];
+    }
+    function hyperPMF(N, K, S, k, lf) {
+      const lo = Math.max(0, S - (N - K));
+      const hi = Math.min(S, K);
+      if (k < lo || k > hi) return 0;
+      const logp = logBinom(K, k, lf) + logBinom(N - K, S - k, lf) - logBinom(N, S, lf);
+      return Math.exp(logp);
+    }
+    function pDetect(N, NA, S, tau, lf) {
+      let p = 0;
+      const hi = Math.min(S, NA);
+      for (let g = Math.max(tau, 0); g <= hi; g++) p += hyperPMF(N, NA, S, g, lf);
+      return Math.min(1, Math.max(0, p));
+    }
+    function log10Alpha(N, K, S, tau, lf) {
+      const hi = Math.min(S, K);
+      if (tau > hi) return -Infinity;
+      let maxLogP = -Infinity;
+      const logPs = [];
+      for (let g = tau; g <= hi; g++) {
+        const lp = logBinom(K, g, lf) + logBinom(N - K, S - g, lf) - logBinom(N, S, lf);
+        logPs.push(lp);
+        if (lp > maxLogP) maxLogP = lp;
+      }
+      if (!isFinite(maxLogP)) return -Infinity;
+      let sum = 0;
+      for (const lp of logPs) sum += Math.exp(lp - maxLogP);
+      return (maxLogP + Math.log(sum)) * Math.LOG10E;
+    }
+    function log10Beta(N, K, Delta, S, tau, lf) {
+      const NA = K + Delta;
+      if (NA > N || tau <= 0) return -Infinity;
+      const hi = Math.min(tau - 1, Math.min(S, NA));
+      const lo = Math.max(0, S - (N - NA));
+      let maxLogP = -Infinity;
+      const logPs = [];
+      for (let g = lo; g <= hi; g++) {
+        const lp = logBinom(NA, g, lf) + logBinom(N - NA, S - g, lf) - logBinom(N, S, lf);
+        logPs.push(lp);
+        if (lp > maxLogP) maxLogP = lp;
+      }
+      if (!isFinite(maxLogP)) return -Infinity;
+      let sum = 0;
+      for (const lp of logPs) sum += Math.exp(lp - maxLogP);
+      return (maxLogP + Math.log(sum)) * Math.LOG10E;
+    }
+    function KL(q, p) {
+      if (q <= 0 || q >= 1 || p <= 0 || p >= 1) return Infinity;
+      return q * Math.log(q / p) + (1 - q) * Math.log((1 - q) / (1 - p));
+    }
+    // ── Block-builder helpers ────────────────────────────────────────────────
+    // Returns z-quantile of standard normal (lookup table)
+    function zQuantile(q){
+      if(q>=0.9999)return 3.7190;
+      if(q>=0.999) return 3.0902;
+      if(q>=0.99)  return 2.3263;
+      if(q>=0.95)  return 1.6449;
+      return 1.2816; // 0.90
+    }
+    // Normal approximation: τ_{NB,q} ≈ (NB + z_q·√NB) / p
+    // Valid for NB ≥ ~10; becomes exact as NB→∞
+    function negBinApprox(NB, p, zq){
+      if(p<=0||p>=1||NB<1) return null;
+      return (NB + zq*Math.sqrt(NB)) / p;
+    }
+    // Exact negative-binomial q-quantile via PMF recurrence.
+    // P(τ_NB=t+1) = P(τ_NB=t) · (t/(t-NB)) · (1-p)
+    // Feasible only when NB·|log₁₀ p| ≲ 300 to avoid underflow.
+    function negBinExact(NB, p, q){
+      if(p<=0||p>=1||NB<1) return null;
+      if(-NB*Math.log10(p)>300) return null; // p^NB underflows
+      const MAX=1000000;
+      let pmf=Math.pow(p,NB), cdf=pmf;
+      if(!isFinite(pmf)||pmf===0) return null;
+      if(cdf>=q) return NB;
+      for(let t=NB+1; t<=NB+MAX; t++){
+        pmf *= (t-1)/(t-NB)*(1-p);
+        if(!isFinite(pmf)||pmf<1e-300) break;
+        cdf += pmf;
+        if(cdf>=q) return t;
+      }
+      return null; // didn't converge — use approx
+    }
+    function findOptimalTau(N, K, Delta, S, lf) {
+      let bestTau = 0, bestMax = Infinity;
+      for (let t = 0; t <= S; t++) {
+        const a = pDetect(N, K, S, t, lf);
+        const NA2 = K + Delta;
+        let b = 0;
+        if (NA2 <= N) for (let g = 0; g < t; g++) b += hyperPMF(N, NA2, S, g, lf);
+        const mx = Math.max(a, Math.min(1, b));
+        if (mx < bestMax) { bestMax = mx; bestTau = t; }
+      }
+      return { tau: bestTau, maxErr: bestMax };
+    }
+    // N_A(1/2): minimum N_A such that P(n_A >= tau | N_A) >= 0.5
+    // Matches Python's find_U_half — binary search exploiting monotonicity in N_A
+    function findUHalf(N, S, tau, lf) {
+      if (pDetect(N, N, S, tau, lf) < 0.5) return null;
+      if (pDetect(N, 0, S, tau, lf) >= 0.5) return 0;
+      let lo = 0, hi = N;
+      while (lo < hi) {
+        const mid = Math.floor((lo + hi) / 2);
+        if (pDetect(N, mid, S, tau, lf) >= 0.5) hi = mid;
+        else lo = mid + 1;
+      }
+      return lo;
+    }
+
+    function sampleHypergeometric(N, NA, S) {
+      let pop = NA, rem = N, count = 0;
+      for (let i = 0; i < S; i++) {
+        if (Math.random() < pop / rem) { count++; pop--; }
+        rem--;
+      }
+      return count;
+    }
+
+    // ─── Design tokens ───────────────────────────────────────────────────────────
+    const C = {
+      bg:"#0d1117", panel:"#161b22", panel2:"#1c2128", border:"#30363d",
+      blue:"#58a6ff", red:"#f85149", green:"#3fb950", yellow:"#d29922",
+      purple:"#bc8cff", orange:"#e07b39", teal:"#39d0c8",
+      text:"#e6edf3", muted:"#8b949e",
+    };
+    const MULTI_DELTA_COLORS = [C.blue, C.red, C.green, C.yellow, C.purple];
+    const MULTI_S_COLORS     = [C.blue, C.red, C.green, C.yellow];
+    // Block-builder constants (matching document figures)
+    const BUILDER_NB   = [1,2,4,8,16,32,64,128,256,512,1024];
+    const EPS_VALS     = [0.1, 0.01, 0.001, 0.0001];
+    const EPS_LBLS     = ["10⁻¹","10⁻²","10⁻³","10⁻⁴"];
+    const EPS_COLS     = [C.yellow, C.green, C.blue, C.purple];
+    const PGREY_VALS   = [0.2, 0.3, 0.5, 0.7];
+    const PGREY_COLS   = [C.blue, C.green, C.yellow, C.red];
+
+    // ─── Shared UI ───────────────────────────────────────────────────────────────
+    function ParamInput({ label, value, onChange, step, min, max }) {
+      return (
+        <div style={{display:"flex",flexDirection:"column",gap:3}}>
+          <label style={{fontSize:11,color:C.muted,fontFamily:"monospace",letterSpacing:"0.04em"}}>{label}</label>
+          <input type="number" value={value} step={step||1} min={min} max={max}
+            onChange={e=>onChange(parseFloat(e.target.value))}
+            style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:5,
+              color:C.text,fontFamily:"monospace",fontSize:12,padding:"4px 8px",width:108,outline:"none"}} />
+        </div>
+      );
+    }
+    function StatCard({ label, value, color }) {
+      return (
+        <div style={{background:C.bg,border:`1px solid ${color||C.border}`,borderRadius:7,padding:"8px 13px",minWidth:150}}>
+          <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",marginBottom:3}}>{label}</div>
+          <div style={{fontSize:13,color:color||C.text,fontFamily:"monospace",fontWeight:"bold"}}>{value}</div>
+        </div>
+      );
+    }
+    function SecHead({ children }) {
+      return (
+        <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14}}>
+          <div style={{width:3,height:16,background:C.blue,borderRadius:2}}/>
+          <span style={{fontSize:12,color:C.muted,fontFamily:"monospace",letterSpacing:"0.1em",textTransform:"uppercase"}}>{children}</span>
+        </div>
+      );
+    }
+    function Btn({ children, onClick, color, active }) {
+      return (
+        <button onClick={onClick} style={{
+          background: active?(color||C.blue):"transparent",
+          color: active?"#000":(color||C.blue),
+          border:`1px solid ${color||C.blue}`,
+          borderRadius:5,padding:"5px 13px",cursor:"pointer",
+          fontSize:11,fontFamily:"monospace",fontWeight:active?700:400,
+          transition:"all 0.12s",
+        }}>{children}</button>
+      );
+    }
+    function CustomTT({ active, payload, label, labelFmt, valFmt }) {
+      if (!active||!payload?.length) return null;
+      return (
+        <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:7,
+          color:C.text,fontFamily:"monospace",fontSize:11,padding:"7px 11px"}}>
+          <div style={{color:C.muted,marginBottom:3}}>x: {labelFmt?labelFmt(label):label}</div>
+          {payload.map((p,i)=>(
+            <div key={i} style={{color:p.color||C.text}}>
+              {p.name}: {valFmt?valFmt(p.value):(typeof p.value==='number'?p.value.toPrecision(4):p.value)}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    const TABS = [
+      { id:"errors",     label:"α & β Curves"     },
+      { id:"detect",     label:"Detection Prob."   },
+      { id:"multidelta", label:"Multi-Δ Overlay"   },
+      { id:"sweep",      label:"τ* vs ε Sweep"     },
+      { id:"network",    label:"Network Bounds"    },
+      { id:"wasted",     label:"Wasted Slots"      },
+      { id:"chernoff",   label:"Chernoff Bound"    },
+      { id:"median",     label:"Blockchain"        },
+      { id:"builder",    label:"Block Builder"     },
+    ];
+
+    // ─── Main App ────────────────────────────────────────────────────────────────
+    function DACalculator() {
+      const [K,       setK]       = useState(1024);
+      const [r,       setR]       = useState(2);
+      const [S,       setS]       = useState(20);
+      const [tau,     setTau]     = useState(13);
+      const [Delta,   setDelta]   = useState(500);
+      const [nNodes,  setNNodes]  = useState(100);
+      const [epsilon, setEpsilon] = useState(0.0001);
+      const [f,       setF]       = useState(0.0333);
+      const [NB,      setNB]      = useState(1024);
+      const [T_epoch, setT_epoch] = useState(388800);
+      const [p_inv,   setP_inv]   = useState(0.6);
+      const [p_tight, setP_tight] = useState(0.2);  // tight bound grey zone p (must be < 0.5)
+      const [deltaList,   setDeltaList]   = useState("1,10,100,500");
+      const [sweepSList,  setSweepSList]  = useState("10,20,50,100");
+      const [simData,     setSimData]     = useState(null);
+      const [simRunning,  setSimRunning]  = useState(false);
+      const [simTrials,   setSimTrials]   = useState(200);
+      const [q_conf,      setQ_conf]      = useState(0.99);
+      const [tab, setTab] = useState("errors");
+
+      const N = r * K;
+      const lf = useMemo(() => makeLogFact(Math.max(N, 500) + 20), [N]);
+
+      const stats = useMemo(() => {
+        const a = pDetect(N, K, S, tau, lf);
+        const NA2 = K + Delta;
+        let b = 0;
+        if (NA2 <= N) for (let g = 0; g < tau; g++) b += hyperPMF(N, NA2, S, g, lf);
+        b = Math.min(1, b);
+        const opt = findOptimalTau(N, K, Delta, S, lf);
+        return { alpha: a, beta: b, optTau: opt.tau, optMaxErr: opt.maxErr };
+      }, [N, K, S, tau, Delta, lf]);
+
+      const errorData = useMemo(() => Array.from({length:S+1},(_,t)=>({
+        tau:t,
+        alpha:(()=>{const v=log10Alpha(N,K,S,t,lf);return isFinite(v)?v:null;})(),
+        beta: (()=>{const v=log10Beta(N,K,Delta,S,t,lf);return isFinite(v)?v:null;})(),
+      })), [N,K,S,Delta,lf]);
+
+      const detectTheory = useMemo(() => Array.from({length:301},(_,i)=>{
+        const NA = Math.round((i/300)*N);
+        return { x:parseFloat((NA/N).toFixed(4)), theory:parseFloat((pDetect(N,NA,S,tau,lf)*nNodes).toFixed(3)) };
+      }), [N,K,S,tau,nNodes,lf]);
+
+      const runSimulation = useCallback(() => {
+        setSimRunning(true);
+        setTimeout(() => {
+          const steps = 120;
+          const result = Array.from({length:steps+1},(_,i)=>{
+            const NA = Math.round((i/steps)*N);
+            let hits = 0;
+            for (let t=0; t<simTrials; t++) {
+              if (sampleHypergeometric(N, NA, S) >= tau) hits++;
+            }
+            return { x:parseFloat((NA/N).toFixed(4)), sim:hits };
+          });
+          setSimData(result);
+          setSimRunning(false);
+        }, 30);
+      }, [N, S, tau, simTrials]);
+
+      const deltaArr = useMemo(() =>
+        deltaList.split(",").map(s=>parseInt(s.trim())).filter(d=>!isNaN(d)&&d>0&&K+d<=N),
+      [deltaList,K,N]);
+
+      const multiDeltaData = useMemo(() => Array.from({length:S+1},(_,t)=>{
+        const row = { tau:t };
+        row["alpha"] = (()=>{const v=log10Alpha(N,K,S,t,lf);return isFinite(v)?v:null;})();
+        deltaArr.forEach(d=>{
+          const v=log10Beta(N,K,d,S,t,lf);
+          row[`beta_${d}`]=isFinite(v)?v:null;
+        });
+        return row;
+      }), [N,K,S,deltaArr,lf]);
+
+      const sweepSArr = useMemo(() =>
+        sweepSList.split(",").map(s=>parseInt(s.trim())).filter(s=>!isNaN(s)&&s>0&&s<=N),
+      [sweepSList,N]);
+
+      const sweepData = useMemo(() => {
+        const k_list = [1,2,3,4,5,6];
+        const eps_values = k_list.map(k => Math.pow(10,-k));
+
+        const alphaByTauByS = {};
+        sweepSArr.forEach(sv => {
+          alphaByTauByS[sv] = Array.from({length:sv+1},(_,t) => pDetect(N,K,sv,t,lf));
+        });
+
+        return eps_values.map(eps => {
+          const row = { log10eps: parseFloat(Math.log10(eps).toFixed(3)) };
+          sweepSArr.forEach(sv => {
+            const alphas = alphaByTauByS[sv];
+            const DELTA_MAX = N - K - 1;
+            let found = false, resBestTau = null, resBestDelta = null;
+
+            // Correct algorithm: loop Delta from 1 upward (matching Python message__1_.txt)
+            // Find globally minimal Delta where some tau satisfies both alpha<=eps, beta<=eps.
+            // Among all such tau for that Delta, pick the one minimising max(alpha,beta).
+            for (let d = 1; d <= DELTA_MAX; d++) {
+              const NA2 = K + d;
+              let bestMax = Infinity, bestTau = null;
+              for (let t = 0; t <= sv; t++) {
+                if (alphas[t] > eps) continue;
+                let b = 0;
+                for (let g = 0; g < t; g++) b += hyperPMF(N, NA2, sv, g, lf);
+                b = Math.min(1, b);
+                if (b <= eps) {
+                  const mx = Math.max(alphas[t], b);
+                  if (mx < bestMax) { bestMax = mx; bestTau = t; }
+                }
+              }
+              if (bestTau !== null) {
+                resBestDelta = d; resBestTau = bestTau; found = true; break;
+              }
+            }
+
+            if (!found) {
+              row[`tau_S${sv}`]=null; row[`delta_S${sv}`]=null;
+              row[`kdnS${sv}`]=null;  row[`uhalf_S${sv}`]=null;
+            } else {
+              const uHalf = findUHalf(N, sv, resBestTau, lf);
+              row[`tau_S${sv}`]   = resBestTau;
+              row[`delta_S${sv}`] = resBestDelta;
+              row[`kdnS${sv}`]    = parseFloat(((K+resBestDelta)/N).toFixed(4));
+              row[`uhalf_S${sv}`] = uHalf!==null ? parseFloat((uHalf/N).toFixed(4)) : null;
+            }
+          });
+          return row;
+        });
+      }, [N,K,sweepSArr,lf]);
+
+      // Multi-NB network data — matching Python's NB_vals = [1,10,100,1024]
+      const NB_VALS = [1, 10, 100, 1024];
+      const NB_COLORS = [C.yellow, C.green, C.red, C.blue];
+
+      const networkData = useMemo(() => Array.from({length:91},(_,i)=>{
+        const n=i+10, half=Math.ceil(n/2);
+        const row = {n};
+        NB_VALS.forEach(nb=>{
+          // Model B (unrecover): 2^n * ε^(nb * ⌈n/2⌉)
+          const log10_u = n*Math.log10(2) + nb*half*Math.log10(epsilon);
+          row[`unrec_${nb}`] = isFinite(log10_u) ? parseFloat(log10_u.toFixed(3)) : null;
+          // Model A (recover): 2^n * (1-(1-ε)^nb)^⌈n/2⌉
+          const fac = 1 - Math.pow(1-epsilon, nb);
+          const log10_r = fac>0 ? n*Math.log10(2)+half*Math.log10(fac) : null;
+          row[`rec_${nb}`] = log10_r!==null&&isFinite(log10_r) ? parseFloat(log10_r.toFixed(3)) : null;
+        });
+        return row;
+      }), [epsilon]);
+
+      const wastedData = useMemo(() => Array.from({length:91},(_,i)=>{
+        const n=i+10, half=Math.ceil(n/2);
+        // Code 2 — Basic upper bound: T·f·2^n·(1−(1−ε)^NB)^⌈n/2⌉
+        const fac=1-Math.pow(1-epsilon,NB);
+        const lv=Math.log10(T_epoch*f)+n*Math.log10(2)+half*Math.log10(fac>0?fac:1e-300);
+        const basic=Math.pow(10,lv);
+        // Code 3 — Tight upper bound: T·f·(4p(1−p))^(n/2), p_tight < 0.5 (grey zone)
+        const p_t = Math.min(p_tight, 0.499);
+        const base4 = 4*p_t*(1-p_t);
+        const tight = (base4>0&&base4<1) ? T_epoch*f*Math.pow(base4,n/2) : null;
+        // Code 4 — Lower bound: T·f·(1−exp(−n·D((⌈n/2⌉−1)/n ‖ p_inv))), p_inv > 0.5
+        const q_lb = (half-1)/n;
+        let lower = null;
+        if(p_inv>0.5 && q_lb>0 && q_lb<1){
+          const kl=KL(q_lb,p_inv);
+          if(isFinite(kl)&&kl>=0) lower=parseFloat((T_epoch*f*Math.max(0,1-Math.exp(-n*kl))).toFixed(2));
+        }
+        const w  = isFinite(basic)&&basic>0  ? parseFloat(basic.toFixed(2))  : null;
+        const tg = tight!==null&&isFinite(tight)&&tight>0 ? parseFloat(tight.toFixed(4)) : null;
+        return {
+          n, wasted:w, tight:tg, lower,
+          log10_wasted: w   ? parseFloat(Math.log10(w).toFixed(3))  : null,
+          log10_tight:  tg  ? parseFloat(Math.log10(tg).toFixed(3)) : null,
+          log10_lower:  lower&&lower>0 ? parseFloat(Math.log10(lower).toFixed(3)) : null,
+        };
+      }), [epsilon,NB,T_epoch,f,p_tight,p_inv]);
+
+      // Blockchain data — two panels matching Python Code 1
+      // SPY = 31536000 (365 days, matching Python's seconds_per_year)
+      const blockchainData = useMemo(() => {
+        const SPY = 31536000;
+        return Array.from({length:91},(_,i)=>{
+          const n=i+10, half=Math.ceil(n/2);
+          // y1 = f · 2^n · ε^⌈n/2⌉  — prob. invalid block accepted by majority (NB=1 blockchain view)
+          const log10_y1 = Math.log10(f) + n*Math.log10(2) + half*Math.log10(epsilon);
+          // y2 = ⌈ln(2)·(2^(−n)·ε^(−⌈n/2⌉) − f)/f⌉ / SPY  — median time (corrected formula with −f)
+          const inner = Math.LN2 * (Math.pow(2,-n) * Math.pow(epsilon,-half) - f) / f;
+          const y2_years = inner > 0 ? Math.ceil(inner) / SPY : null;
+          const log10_y2 = y2_years && y2_years > 0 ? Math.log10(y2_years) : null;
+          return {
+            n,
+            log10_y1: isFinite(log10_y1) ? parseFloat(log10_y1.toFixed(3)) : null,
+            log10_y2: log10_y2!==null&&isFinite(log10_y2) ? parseFloat(log10_y2.toFixed(3)) : null,
+          };
+        });
+      }, [epsilon, f]);
+
+      // Chernoff — both regimes simultaneously (Code 3 + Code 4)
+      const chernoffData = useMemo(() => Array.from({length:91},(_,i)=>{
+        const n=i+10, q=(Math.ceil(n/2)-1)/n;
+        // Code 3 tight UPPER bound: exp(−n·KL(1/2‖p_tight)) = (4p(1−p))^(n/2), requires p_tight < 0.5
+        let tight_upper=null, log10_tight=null;
+        if(p_tight>0 && p_tight<0.5){
+          const kl=KL(0.5,p_tight);
+          if(isFinite(kl)&&kl>=0){
+            tight_upper=parseFloat(Math.exp(-n*kl).toFixed(8));
+            const lt=-n*kl*Math.LOG10E;
+            log10_tight=isFinite(lt)?parseFloat(lt.toFixed(3)):null;
+          }
+        }
+        // Code 4 LOWER bound: 1−exp(−n·KL(q‖p_inv)), requires p_inv > 0.5
+        let lower_bound = null;
+        if(p_inv>0.5 && q>0 && q<1){
+          const kl=KL(q,p_inv);
+          if(isFinite(kl)&&kl>=0) lower_bound=parseFloat(Math.max(0,1-Math.exp(-n*kl)).toFixed(8));
+        }
+        return {n, tight_upper, log10_tight, lower_bound};
+      }), [p_tight, p_inv]);
+
+      // Block-builder data: negative-binomial hitting time τ_{NB,q}
+      // Three datasets: unrecoverable (p=ε), recoverable (p=1-ε), grey zone (fixed p)
+      const builderData = useMemo(() => {
+        const zq = zQuantile(q_conf);
+        return BUILDER_NB.map(NB => {
+          const row = {NB};
+          // Unrecoverable case: p = ε  (approx formula; exact where numerically feasible)
+          EPS_VALS.forEach((eps,ki)=>{
+            const approx = negBinApprox(NB, eps, zq);
+            const exact  = negBinExact(NB, eps, q_conf);
+            row[`u_approx_${ki}`] = approx ? parseFloat(approx.toFixed(1)) : null;
+            row[`u_exact_${ki}`]  = exact  ? parseFloat(exact)             : null;
+            row[`u_log10_${ki}`]  = approx&&approx>0 ? parseFloat(Math.log10(approx).toFixed(3)) : null;
+          });
+          // Recoverable case: p = 1−ε  (tau ≈ NB for small ε)
+          EPS_VALS.forEach((eps,ki)=>{
+            const approx = negBinApprox(NB, 1-eps, zq);
+            row[`r_approx_${ki}`] = approx ? parseFloat(approx.toFixed(1)) : null;
+          });
+          // Grey-zone case: fixed p in (0,1)
+          PGREY_VALS.forEach((p,pi)=>{
+            const approx = negBinApprox(NB, p, zq);
+            row[`g_approx_${pi}`] = approx ? parseFloat(approx.toFixed(1)) : null;
+            row[`g_log10_${pi}`]  = approx&&approx>0 ? parseFloat(Math.log10(approx).toFixed(3)) : null;
+          });
+          return row;
+        });
+      }, [q_conf]);
+
+      const detectMerged = useMemo(()=>{
+        if(!simData) return detectTheory;
+        const map=new Map(simData.map(d=>[d.x,d.sim]));
+        return detectTheory.map(d=>({...d,sim:map.get(d.x)??null}));
+      },[detectTheory,simData]);
+
+      const KN  = K/N;
+      const KDN = Math.min((K+Delta)/N, 1);
+      const ML=55, MR=20;
+
+      return (
+        <div style={{background:C.bg,minHeight:"100vh",color:C.text,padding:"20px 18px"}}>
+
+          {/* Header */}
+          <div style={{marginBottom:22}}>
+            <div style={{fontSize:10,letterSpacing:"0.18em",color:C.muted,fontFamily:"monospace",marginBottom:5}}>
+              DATA AVAILABILITY SAMPLING — PARAMETRIC CALCULATOR
+            </div>
+            <h1 style={{margin:0,fontSize:21,fontWeight:700,color:C.text,letterSpacing:"-0.02em"}}>
+              DA Sampling Analysis
+            </h1>
+            <div style={{marginTop:3,fontSize:11,color:C.muted}}>
+              N = r·K = <span style={{color:C.blue,fontFamily:"monospace"}}>{N}</span>
+              &nbsp;·&nbsp; K/N = <span style={{color:C.green,fontFamily:"monospace"}}>{(K/N).toFixed(3)}</span>
+              &nbsp;·&nbsp; Recoverable if N_A ≥ <span style={{color:C.green,fontFamily:"monospace"}}>{K+1}</span>
+            </div>
+          </div>
+
+          {/* Parameters */}
+          <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"16px 20px",marginBottom:16}}>
+            <SecHead>DA Sampling Parameters</SecHead>
+            <div style={{display:"flex",flexWrap:"wrap",gap:14,alignItems:"flex-end"}}>
+              <ParamInput label="K"             value={K}      onChange={setK}      min={1} />
+              <ParamInput label="r"             value={r}      onChange={setR}      min={1} max={16} />
+              <ParamInput label="S (sample)"    value={S}      onChange={setS}      min={1} max={N} />
+              <ParamInput label="τ (threshold)" value={tau}    onChange={setTau}    min={0} max={S} />
+              <ParamInput label="Δ (margin)"    value={Delta}  onChange={setDelta}  min={1} max={N-K} />
+              <ParamInput label="n (nodes)"     value={nNodes} onChange={setNNodes} min={1} />
+              <Btn color={C.green} active={false} onClick={()=>setTau(stats.optTau)}>
+                Auto τ* = {stats.optTau}
+              </Btn>
+            </div>
+            <div style={{height:1,background:C.border,margin:"14px 0"}}/>
+            <SecHead>Blockchain / Network Parameters</SecHead>
+            <div style={{display:"flex",flexWrap:"wrap",gap:14,alignItems:"flex-end"}}>
+              <ParamInput label="ε (error bound)"  value={epsilon} onChange={setEpsilon} step={0.0001} min={1e-10} max={1} />
+              <ParamInput label="f (slot prob)"    value={f}       onChange={setF}       step={0.001}  min={0}     max={1} />
+              <ParamInput label="N_B (blobs)"      value={NB}      onChange={setNB}      min={1}       max={1024} />
+              <ParamInput label="T (slots/epoch)"  value={T_epoch} onChange={setT_epoch} min={1} />
+              <ParamInput label="p (block inval.)" value={p_inv}   onChange={setP_inv}   step={0.05}   min={0.01}  max={0.99} />
+              <ParamInput label="p_tight (grey zone, &lt;0.5)" value={p_tight} onChange={setP_tight} step={0.01} min={0.01} max={0.49} />
+              <Btn color={C.teal} active={false} onClick={()=>setP_tight(parseFloat(Math.min(0.499,(1-Math.pow(1-epsilon,NB))+0.1).toFixed(4)))}>
+                Auto p_tight
+              </Btn>
+            </div>
+          </div>
+
+          {/* Stats bar */}
+          <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:16}}>
+            <StatCard label="α(τ) — Type I"        value={stats.alpha.toExponential(3)}   color={C.blue}   />
+            <StatCard label="β(τ,Δ) — Type II"     value={stats.beta.toExponential(3)}    color={C.red}    />
+            <StatCard label="Optimal τ*"            value={`${stats.optTau}  (ε*≈${stats.optMaxErr.toExponential(1)})`} color={C.green} />
+            <StatCard label="N = r·K"               value={N} />
+            <StatCard label="Grey zone Δ/N"         value={`${((KDN-KN)*100).toFixed(1)}%`} color={C.purple} />
+            <StatCard label="Avg non-empty/epoch"   value={Math.round(T_epoch*f).toLocaleString()} color={C.yellow} />
+          </div>
+
+          {/* Tab bar */}
+          <div style={{display:"flex",gap:3,marginBottom:14,flexWrap:"wrap"}}>
+            {TABS.map(t=>(
+              <button key={t.id} onClick={()=>setTab(t.id)} style={{
+                background:tab===t.id?C.blue:C.panel, color:tab===t.id?"#000":C.muted,
+                border:`1px solid ${tab===t.id?C.blue:C.border}`,
+                borderRadius:5,padding:"5px 13px",cursor:"pointer",
+                fontSize:11,fontFamily:"monospace",fontWeight:tab===t.id?700:400,transition:"all 0.12s",
+              }}>{t.label}</button>
+            ))}
+          </div>
+
+          {/* Chart panel */}
+          <div style={{background:C.panel,border:`1px solid ${C.border}`,borderRadius:10,padding:"18px 14px"}}>
+
+            {/* α & β CURVES */}
+            {tab==="errors" && (
+              <>
+                <SecHead>α(τ) and β(τ,Δ) vs threshold τ — log₁₀ scale</SecHead>
+                <div style={{fontSize:11,color:C.muted,marginBottom:14}}>
+                  K={K}, r={r}, N={N}, S={S}, Δ={Delta}
+                  &nbsp;·&nbsp;<span style={{color:C.blue}}>α(τ)</span> = Type I (false positive at N_A=K)
+                  &nbsp;·&nbsp;<span style={{color:C.red}}>β(τ,Δ)</span> = Type II (miss at N_A=K+Δ)
+                </div>
+                <ResponsiveContainer width="100%" height={380}>
+                  <LineChart data={errorData} margin={{left:20,right:20,top:10,bottom:22}}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                    <XAxis dataKey="tau" stroke={C.muted}
+                      tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
+                      label={{value:"τ",position:"insideBottom",offset:-10,fill:C.muted,fontSize:13}}/>
+                    <YAxis stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                      tickFormatter={v=>`10^${v.toFixed(0)}`}
+                      label={{value:"log₁₀(prob)",angle:-90,position:"insideLeft",fill:C.muted,fontSize:11}}/>
+                    <Tooltip content={<CustomTT labelFmt={v=>`τ=${v}`} valFmt={v=>`10^(${v?.toFixed(2)})`}/>}/>
+                    <Legend wrapperStyle={{fontSize:11,fontFamily:"monospace"}}/>
+                    <ReferenceLine x={tau} stroke={C.green} strokeDasharray="5 3"
+                      label={{value:`τ=${tau}`,fill:C.green,fontSize:10}}/>
+                    <Line type="monotone" dataKey="alpha" name="α(τ)"   stroke={C.blue} dot={false} strokeWidth={2} connectNulls={false}/>
+                    <Line type="monotone" dataKey="beta"  name="β(τ,Δ)" stroke={C.red}  dot={false} strokeWidth={2} connectNulls={false}/>
+                  </LineChart>
+                </ResponsiveContainer>
+              </>
+            )}
+
+            {/* DETECTION PROBABILITY */}
+            {tab==="detect" && (
+              <>
+                <SecHead>Detection probability vs N_A/N</SecHead>
+                <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14,flexWrap:"wrap"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <label style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>Trials/point:</label>
+                    <input type="number" value={simTrials} min={10} max={5000} step={50}
+                      onChange={e=>setSimTrials(parseInt(e.target.value))}
+                      style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:5,
+                        color:C.text,fontFamily:"monospace",fontSize:12,padding:"3px 7px",width:80,outline:"none"}}/>
+                  </div>
+                  <Btn color={C.green} active={!!simData} onClick={runSimulation}>
+                    {simRunning?"Running…":simData?"Re-run Simulation":"▶ Run Simulation"}
+                  </Btn>
+                  {simData && <Btn color={C.red} active={false} onClick={()=>setSimData(null)}>✕ Clear</Btn>}
+                  <span style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>τ={tau} · S={S} · n={nNodes}</span>
+                </div>
+                <div style={{display:"flex",gap:18,marginBottom:12,flexWrap:"wrap",fontSize:11,fontFamily:"monospace",color:C.muted}}>
+                  {[
+                    {color:C.blue,sw:2.5,dash:"none",label:"Theory: n × P(n_A ≥ τ | N_A)"},
+                    simData&&{color:C.red,dot:true,label:"Simulation"},
+                    {color:C.red, sw:1.5,dash:"7 4", label:`K/N = ${KN.toFixed(3)}`},
+                    {color:C.blue,sw:1.5,dash:"7 4", label:`(K+Δ)/N = ${KDN.toFixed(3)}`},
+                    {color:"#666",sw:1,  dash:"none", label:"n/2"},
+                  ].filter(Boolean).map(({color,sw,dash,label,dot})=>(
+                    <div key={label} style={{display:"flex",alignItems:"center",gap:5}}>
+                      {dot
+                        ? <svg width={14} height={10}><rect x={4} y={2} width={6} height={6} fill={color}/></svg>
+                        : <svg width={26} height={10}><line x1={0} y1={5} x2={26} y2={5} stroke={color} strokeWidth={sw} strokeDasharray={dash}/></svg>}
+                      <span>{label}</span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{position:"relative"}}>
+                  <ResponsiveContainer width="100%" height={440}>
+                    <ComposedChart data={detectMerged} margin={{left:ML,right:MR,top:16,bottom:36}}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                      <XAxis dataKey="x" stroke={C.muted} type="number" domain={[0,1]}
+                        tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
+                        tickFormatter={v=>v.toFixed(2)}
+                        label={{value:"N_A / N",position:"insideBottom",offset:-18,fill:C.muted,fontSize:13}}/>
+                      <YAxis stroke={C.muted} tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
+                        domain={[0,nNodes]}
+                        label={{value:"Count of successes out of n",angle:-90,position:"insideLeft",offset:10,fill:C.muted,fontSize:10}}/>
+                      <Tooltip content={<CustomTT labelFmt={v=>v?.toFixed(3)} valFmt={v=>v?.toFixed(2)}/>}/>
+                      <ReferenceArea x1={0}   x2={KN}  fill={C.red}    fillOpacity={0.07} stroke="none"/>
+                      <ReferenceArea x1={KN}  x2={KDN} fill={C.purple} fillOpacity={0.07} stroke="none"/>
+                      <ReferenceArea x1={KDN} x2={1}   fill={C.green}  fillOpacity={0.07} stroke="none"/>
+                      <ReferenceLine x={KN}  stroke={C.red}  strokeDasharray="7 4" strokeWidth={1.8}/>
+                      <ReferenceLine x={KDN} stroke={C.blue} strokeDasharray="7 4" strokeWidth={1.8}/>
+                      <ReferenceLine y={nNodes/2} stroke="#555" strokeWidth={1}
+                        label={{value:"n/2",position:"insideRight",fill:"#666",fontSize:10}}/>
+                      <Line type="monotone" dataKey="theory" name="Theory"
+                        stroke={C.blue} dot={false} strokeWidth={2.5} connectNulls/>
+                      {simData && (
+                        <Scatter dataKey="sim" name="Simulation" fill={C.red}
+                          shape={(props)=>{
+                            const {cx,cy}=props;
+                            if(cx==null||cy==null) return null;
+                            return <rect x={cx-3} y={cy-3} width={6} height={6} fill={C.red} opacity={0.85}/>;
+                          }}/>
+                      )}
+                    </ComposedChart>
+                  </ResponsiveContainer>
+                  {/* Annotation boxes */}
+                  <div style={{position:"absolute",
+                    left:`calc(${ML}px + ${(KN/2)*100}% * (1 - ${ML+MR}px / 100%))`,
+                    bottom:62,transform:"translateX(-50%)",
+                    background:C.panel,border:`1.5px solid ${C.red}`,borderRadius:6,
+                    padding:"5px 10px",fontSize:11,fontFamily:"monospace",
+                    color:C.red,pointerEvents:"none",whiteSpace:"nowrap",zIndex:10}}>
+                    <div style={{fontWeight:700}}>Data is unrecover.</div>
+                    <div style={{color:C.muted}}>with prob. ≥ 1−ε</div>
+                  </div>
+                  <div style={{position:"absolute",
+                    left:`calc(${ML}px + ${((KN+KDN)/2)*100}% * (1 - ${ML+MR}px / 100%))`,
+                    top:"40%",transform:"translateX(-50%)",
+                    background:C.panel,border:`1.5px solid ${C.purple}`,borderRadius:6,
+                    padding:"5px 10px",fontSize:11,fontFamily:"monospace",
+                    color:C.purple,pointerEvents:"none",whiteSpace:"nowrap",zIndex:10}}>
+                    <div style={{fontWeight:700}}>Data is recover.</div>
+                    <div style={{color:C.muted}}>with prob. ∈ (ε, 1−ε)</div>
+                  </div>
+                  <div style={{position:"absolute",
+                    left:`calc(${ML}px + ${((KDN+1)/2)*100}% * (1 - ${ML+MR}px / 100%))`,
+                    top:26,transform:"translateX(-50%)",
+                    background:C.panel,border:`1.5px solid ${C.blue}`,borderRadius:6,
+                    padding:"5px 10px",fontSize:11,fontFamily:"monospace",
+                    color:C.blue,pointerEvents:"none",whiteSpace:"nowrap",zIndex:10}}>
+                    <div style={{fontWeight:700}}>Data is recover.</div>
+                    <div style={{color:C.muted}}>with prob. ≥ 1−ε</div>
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap"}}>
+                  <StatCard label="α(τ)"         value={stats.alpha.toExponential(3)} color={C.red}/>
+                  <StatCard label="β(τ,Δ)"        value={stats.beta.toExponential(3)} color={C.blue}/>
+                  <StatCard label="Grey zone Δ/N" value={`${((KDN-KN)*100).toFixed(1)}%`} color={C.purple}/>
+                  <StatCard label="Optimal τ*"    value={stats.optTau} color={C.green}/>
+                </div>
+              </>
+            )}
+
+            {/* MULTI-Δ OVERLAY */}
+            {tab==="multidelta" && (
+              <>
+                <SecHead>α(τ) and β(τ,Δ) for multiple Δ values — log₁₀ scale</SecHead>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
+                  <label style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>Δ values (comma-separated):</label>
+                  <input value={deltaList} onChange={e=>setDeltaList(e.target.value)}
+                    style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:5,
+                      color:C.text,fontFamily:"monospace",fontSize:12,padding:"4px 10px",width:240,outline:"none"}}/>
+                  <span style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>K={K}, r={r}, N={N}, S={S}</span>
+                </div>
+                <div style={{display:"flex",gap:16,marginBottom:14,flexWrap:"wrap",fontSize:11,fontFamily:"monospace",color:C.muted}}>
+                  <div style={{display:"flex",alignItems:"center",gap:5}}>
+                    <svg width={26} height={10}><line x1={0} y1={5} x2={26} y2={5} stroke={C.blue} strokeWidth={2}/></svg>
+                    <span>α(τ) — independent of Δ</span>
+                  </div>
+                  {deltaArr.map((d,i)=>(
+                    <div key={d} style={{display:"flex",alignItems:"center",gap:5}}>
+                      <svg width={26} height={10}><line x1={0} y1={5} x2={26} y2={5} stroke={MULTI_DELTA_COLORS[i%5]} strokeWidth={1.8} strokeDasharray="5 2"/></svg>
+                      <span>β(τ, Δ={d})</span>
+                    </div>
+                  ))}
+                </div>
+                <ResponsiveContainer width="100%" height={400}>
+                  <LineChart data={multiDeltaData} margin={{left:20,right:20,top:10,bottom:22}}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                    <XAxis dataKey="tau" stroke={C.muted}
+                      tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
+                      label={{value:"τ",position:"insideBottom",offset:-10,fill:C.muted,fontSize:13}}/>
+                    <YAxis stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                      tickFormatter={v=>`10^${v.toFixed(0)}`}
+                      label={{value:"log₁₀(prob)",angle:-90,position:"insideLeft",fill:C.muted,fontSize:11}}/>
+                    <Tooltip content={<CustomTT labelFmt={v=>`τ=${v}`} valFmt={v=>`10^(${v?.toFixed(2)})`}/>}/>
+                    <ReferenceLine x={tau} stroke={C.green} strokeDasharray="5 3"
+                      label={{value:`τ=${tau}`,fill:C.green,fontSize:10}}/>
+                    <Line type="monotone" dataKey="alpha" name="α(τ)" stroke={C.blue} dot={false} strokeWidth={2.2} connectNulls={false}/>
+                    {deltaArr.map((d,i)=>(
+                      <Line key={d} type="monotone" dataKey={`beta_${d}`} name={`β(τ,Δ=${d})`}
+                        stroke={MULTI_DELTA_COLORS[i%5]} dot={false} strokeWidth={1.8} strokeDasharray="5 2" connectNulls={false}/>
+                    ))}
+                  </LineChart>
+                </ResponsiveContainer>
+              </>
+            )}
+
+            {/* τ* vs ε SWEEP */}
+            {tab==="sweep" && (
+              <>
+                <SecHead>Optimal τ*, Δ* and N_A(1/2)/N vs error bound ε — multiple S values</SecHead>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
+                  <label style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>S values (comma-separated):</label>
+                  <input value={sweepSList} onChange={e=>setSweepSList(e.target.value)}
+                    style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:5,
+                      color:C.text,fontFamily:"monospace",fontSize:12,padding:"4px 10px",width:200,outline:"none"}}/>
+                  <span style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>K={K}, r={r}, N={N}</span>
+                </div>
+
+                {/* ε upper-bound warning from N_B */}
+                {(() => {
+                  const epsMax = 1 - Math.pow(3/4, 1/NB);
+                  return (
+                    <div style={{marginBottom:14,padding:"7px 12px",borderRadius:6,
+                      background:"rgba(210,153,34,0.08)",border:`1px solid ${C.yellow}`,
+                      fontSize:11,fontFamily:"monospace",color:C.yellow}}>
+                      ⚠ For N_B={NB} blobs, ε must satisfy ε &lt; 1−(3/4)^(1/N_B) ≈ {epsMax.toExponential(3)} to keep network bounds decreasing with n.
+                      &nbsp;Current ε={epsilon} is {epsilon < epsMax ? <span style={{color:C.green}}>✓ valid</span> : <span style={{color:C.red}}>✗ too large — reduce ε or decrease N_B</span>}.
+                    </div>
+                  );
+                })()}
+
+                {/* Color legend */}
+                <div style={{display:"flex",gap:16,marginBottom:14,flexWrap:"wrap",fontSize:11,fontFamily:"monospace",color:C.muted}}>
+                  {sweepSArr.map((sv,i)=>(
+                    <div key={sv} style={{display:"flex",alignItems:"center",gap:10}}>
+                      <div style={{display:"flex",alignItems:"center",gap:4}}>
+                        <svg width={26} height={10}><line x1={0} y1={5} x2={26} y2={5} stroke={MULTI_S_COLORS[i%4]} strokeWidth={2} strokeDasharray="5 2"/></svg>
+                        <span style={{color:MULTI_S_COLORS[i%4]}}>N_A(1/2)/N, S={sv}</span>
+                      </div>
+                      <div style={{display:"flex",alignItems:"center",gap:4}}>
+                        <svg width={26} height={10}><line x1={0} y1={5} x2={26} y2={5} stroke={MULTI_S_COLORS[i%4]} strokeWidth={2}/></svg>
+                        <span style={{color:MULTI_S_COLORS[i%4]}}>(K+Δ*)/N, S={sv}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Top row: τ* and Δ* panels side by side */}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
+                  {/* τ* vs ε */}
+                  <div>
+                    <div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginBottom:6,textAlign:"center"}}>
+                      Optimal τ* vs ε
+                    </div>
+                    <ResponsiveContainer width="100%" height={280}>
+                      <LineChart data={sweepData} margin={{left:20,right:10,top:8,bottom:30}}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                        <XAxis dataKey="log10eps" stroke={C.muted}
+                          tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                          tickFormatter={v=>`10^${v.toFixed(0)}`}
+                          label={{value:"ε",position:"insideBottom",offset:-18,fill:C.muted,fontSize:12}}/>
+                        <YAxis stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                          label={{value:"τ*",angle:-90,position:"insideLeft",fill:C.muted,fontSize:12}}/>
+                        <Tooltip content={<CustomTT labelFmt={v=>`ε=10^(${v})`} valFmt={v=>v?.toFixed(0)}/>}/>
+                        <Legend wrapperStyle={{fontSize:10,fontFamily:"monospace"}}/>
+                        {sweepSArr.map((sv,i)=>(
+                          <Line key={sv} type="monotone" dataKey={`tau_S${sv}`} name={`S=${sv}`}
+                            stroke={MULTI_S_COLORS[i%4]} dot={{r:3}} strokeWidth={1.8} connectNulls={false}/>
+                        ))}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* Δ* vs ε */}
+                  <div>
+                    <div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginBottom:6,textAlign:"center"}}>
+                      Minimal Δ* vs ε
+                    </div>
+                    <ResponsiveContainer width="100%" height={280}>
+                      <LineChart data={sweepData} margin={{left:30,right:10,top:8,bottom:30}}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                        <XAxis dataKey="log10eps" stroke={C.muted}
+                          tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                          tickFormatter={v=>`10^${v.toFixed(0)}`}
+                          label={{value:"ε",position:"insideBottom",offset:-18,fill:C.muted,fontSize:12}}/>
+                        <YAxis stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                          label={{value:"Δ*",angle:-90,position:"insideLeft",fill:C.muted,fontSize:12}}/>
+                        <Tooltip content={<CustomTT labelFmt={v=>`ε=10^(${v})`} valFmt={v=>v?.toFixed(0)}/>}/>
+                        <Legend wrapperStyle={{fontSize:10,fontFamily:"monospace"}}/>
+                        {sweepSArr.map((sv,i)=>(
+                          <Line key={sv} type="monotone" dataKey={`delta_S${sv}`} name={`S=${sv}`}
+                            stroke={MULTI_S_COLORS[i%4]} dot={{r:3}} strokeWidth={1.8} connectNulls={false}/>
+                        ))}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Bottom row: combined plot — N_A(1/2)/N (dashed) + (K+Δ*)/N (solid) */}
+                <div style={{borderTop:`1px solid ${C.border}`,paddingTop:16}}>
+                  <div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginBottom:6,textAlign:"center"}}>
+                    Combined: N_A(1/2)/N <span style={{opacity:0.6}}>(dashed)</span> and (K+Δ*)/N <span style={{opacity:0.6}}>(solid)</span> vs ε
+                    &nbsp;·&nbsp; red line = K/N = 1/r = {(K/N).toFixed(3)}
+                  </div>
+                  <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",marginBottom:10,opacity:0.7}}>
+                    N_A(1/2)/N: min fraction where a single node detects recoverability with prob ≥ 1/2 &nbsp;·&nbsp;
+                    (K+Δ*)/N: fraction above which recoverability is certified with prob ≥ 1−ε &nbsp;·&nbsp;
+                    Grey zone = region between the two curves
+                  </div>
+                  <ResponsiveContainer width="100%" height={340}>
+                    <LineChart data={sweepData} margin={{left:30,right:20,top:8,bottom:30}}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                      <XAxis dataKey="log10eps" stroke={C.muted}
+                        tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                        tickFormatter={v=>`10^${v.toFixed(0)}`}
+                        label={{value:"ε",position:"insideBottom",offset:-18,fill:C.muted,fontSize:12}}/>
+                      <YAxis stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                        domain={[K/N - 0.01, 1.0]}
+                        tickFormatter={v=>v.toFixed(2)}
+                        label={{value:"N_A / N",angle:-90,position:"insideLeft",fill:C.muted,fontSize:11}}/>
+                      <Tooltip content={<CustomTT labelFmt={v=>`ε=10^(${v})`} valFmt={v=>v?.toFixed(4)}/>}/>
+                      {/* K/N reference line */}
+                      <ReferenceLine y={K/N} stroke={C.red} strokeWidth={1.5}
+                        label={{value:`K/N = ${(K/N).toFixed(3)}`,position:"insideRight",fill:C.red,fontSize:9}}/>
+                      {/* N_A(1/2)/N — dashed lines */}
+                      {sweepSArr.map((sv,i)=>(
+                        <Line key={`uh_${sv}`} type="monotone" dataKey={`uhalf_S${sv}`}
+                          name={`N_A(1/2)/N, S=${sv}`}
+                          stroke={MULTI_S_COLORS[i%4]} dot={{r:3}} strokeWidth={1.8}
+                          strokeDasharray="6 3" connectNulls={false}/>
+                      ))}
+                      {/* (K+Δ*)/N — solid lines */}
+                      {sweepSArr.map((sv,i)=>(
+                        <Line key={`kdn_${sv}`} type="monotone" dataKey={`kdnS${sv}`}
+                          name={`(K+Δ*)/N, S=${sv}`}
+                          stroke={MULTI_S_COLORS[i%4]} dot={{r:3}} strokeWidth={1.8}
+                          connectNulls={false}/>
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </>
+            )}
+
+            {/* NETWORK BOUNDS */}
+            {tab==="network" && (
+              <>
+                <SecHead>Network-level error bounds vs validator count n — multi-N_B</SecHead>
+                <div style={{fontSize:11,color:C.muted,marginBottom:10}}>
+                  ε={epsilon} &nbsp;·&nbsp; Two panels matching Python output.
+                  &nbsp;<span style={{color:C.blue}}>Left</span>: P(maj. accepts valid block | data unrecover.) = 2ⁿ·ε^(N_B·⌈n/2⌉)
+                  &nbsp;·&nbsp;<span style={{color:C.red}}>Right</span>: P(maj. rejects invalid block | data recover.) = 2ⁿ·[1−(1−ε)^N_B]^⌈n/2⌉
+                </div>
+
+                {/* ε validity warning */}
+                {(() => {
+                  const epsMax = 1 - Math.pow(3/4, 1/NB);
+                  return epsilon >= epsMax ? (
+                    <div style={{marginBottom:10,padding:"6px 12px",borderRadius:6,
+                      background:"rgba(248,81,73,0.08)",border:`1px solid ${C.red}`,
+                      fontSize:11,fontFamily:"monospace",color:C.red}}>
+                      ⚠ ε={epsilon} ≥ 1−(3/4)^(1/N_B) ≈ {epsMax.toExponential(3)} for N_B={NB}.
+                      Network bounds will NOT decrease with n — reduce ε or N_B.
+                    </div>
+                  ) : null;
+                })()}
+
+                {/* NB color legend */}
+                <div style={{display:"flex",gap:18,marginBottom:14,flexWrap:"wrap",fontSize:11,fontFamily:"monospace",color:C.muted}}>
+                  {NB_VALS.map((nb,i)=>(
+                    <div key={nb} style={{display:"flex",alignItems:"center",gap:5}}>
+                      <svg width={26} height={10}><line x1={0} y1={5} x2={26} y2={5} stroke={NB_COLORS[i]} strokeWidth={2}/></svg>
+                      <span style={{color:NB_COLORS[i]}}>N_B = {nb}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Two panels side by side */}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+
+                  {/* Left: unrecoverable — Model B */}
+                  <div>
+                    <div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginBottom:6,textAlign:"center"}}>
+                      P(block valid for maj. | data <span style={{color:C.red}}>unrecover.</span>) = 2ⁿ·ε^(N_B·⌈n/2⌉)
+                    </div>
+                    <ResponsiveContainer width="100%" height={360}>
+                      <LineChart data={networkData} margin={{left:22,right:10,top:8,bottom:28}}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                        <XAxis dataKey="n" stroke={C.muted}
+                          tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
+                          label={{value:"n (validators)",position:"insideBottom",offset:-14,fill:C.muted,fontSize:11}}/>
+                        <YAxis stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                          tickFormatter={v=>`10^${v.toFixed(0)}`}
+                          label={{value:"log₁₀(bound)",angle:-90,position:"insideLeft",fill:C.muted,fontSize:10}}/>
+                        <Tooltip content={<CustomTT labelFmt={v=>`n=${v}`} valFmt={v=>`10^(${v?.toFixed(1)})`}/>}/>
+                        {NB_VALS.map((nb,i)=>(
+                          <Line key={nb} type="monotone" dataKey={`unrec_${nb}`}
+                            name={`N_B=${nb}`} stroke={NB_COLORS[i]}
+                            dot={false} strokeWidth={2} connectNulls={false}/>
+                        ))}
+                        <Legend wrapperStyle={{fontSize:11,fontFamily:"monospace"}}/>
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* Right: recoverable — Model A */}
+                  <div>
+                    <div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginBottom:6,textAlign:"center"}}>
+                      P(block invalid for maj. | data <span style={{color:C.green}}>recover.</span>) = 2ⁿ·[1−(1−ε)^N_B]^⌈n/2⌉
+                    </div>
+                    <ResponsiveContainer width="100%" height={360}>
+                      <LineChart data={networkData} margin={{left:22,right:10,top:8,bottom:28}}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                        <XAxis dataKey="n" stroke={C.muted}
+                          tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
+                          label={{value:"n (validators)",position:"insideBottom",offset:-14,fill:C.muted,fontSize:11}}/>
+                        <YAxis stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                          tickFormatter={v=>`10^${v.toFixed(0)}`}
+                          label={{value:"log₁₀(bound)",angle:-90,position:"insideLeft",fill:C.muted,fontSize:10}}/>
+                        <Tooltip content={<CustomTT labelFmt={v=>`n=${v}`} valFmt={v=>`10^(${v?.toFixed(1)})`}/>}/>
+                        {NB_VALS.map((nb,i)=>(
+                          <Line key={nb} type="monotone" dataKey={`rec_${nb}`}
+                            name={`N_B=${nb}`} stroke={NB_COLORS[i]}
+                            dot={false} strokeWidth={2} connectNulls={false}/>
+                        ))}
+                        <Legend wrapperStyle={{fontSize:11,fontFamily:"monospace"}}/>
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* p-value table matching Python's print output (fixed: ε=1e-4, not 1e-5) */}
+                <div style={{marginTop:16,padding:"10px 14px",background:C.bg,borderRadius:7,
+                  border:`1px solid ${C.border}`,fontFamily:"monospace",fontSize:11,color:C.muted}}>
+                  <div style={{color:C.text,marginBottom:6,fontWeight:700}}>
+                    Model B: p = ε^N_B with ε={epsilon}
+                  </div>
+                  {NB_VALS.map(nb=>{
+                    const log10p = nb * Math.log10(epsilon);
+                    return (
+                      <div key={nb} style={{marginBottom:2}}>
+                        N_B={String(nb).padStart(4,' ')}:&nbsp;
+                        log₁₀(p) = <span style={{color:C.blue}}>{log10p.toFixed(0)}</span>
+                        &nbsp; (p = 10^{log10p.toFixed(0)})
+                      </div>
+                    );
+                  })}
+                  <div style={{marginTop:6,color:C.yellow,fontSize:10}}>
+                    ✓ Note: ε={epsilon} used throughout (Python script had a typo printing "1e-5" while computing with 1e-4).
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* WASTED SLOTS */}
+            {tab==="wasted" && (
+              <>
+                <SecHead>Average wasted slots per epoch vs n — three regimes</SecHead>
+                <div style={{fontSize:11,color:C.muted,marginBottom:10}}>
+                  ε={epsilon}, N_B={NB}, T={T_epoch.toLocaleString()}, f≈{f.toFixed(4)}
+                  &nbsp;·&nbsp; Tf = {Math.round(T_epoch*f).toLocaleString()} avg non-empty slots/epoch
+                </div>
+                {/* 3-curve legend */}
+                <div style={{display:"flex",gap:18,marginBottom:10,flexWrap:"wrap",fontSize:11,fontFamily:"monospace",color:C.muted}}>
+                  <div style={{display:"flex",alignItems:"center",gap:5}}>
+                    <svg width={26} height={10}><line x1={0} y1={5} x2={26} y2={5} stroke={C.red} strokeWidth={2}/></svg>
+                    <span>Code 2 — Basic: T·f·2ⁿ·(1−(1−ε)^N_B)^⌈n/2⌉</span>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:5}}>
+                    <svg width={26} height={10}><line x1={0} y1={5} x2={26} y2={5} stroke={C.blue} strokeWidth={2} strokeDasharray="5 2"/></svg>
+                    <span>Code 3 — Tight upper: T·f·(4p(1−p))^(n/2), p_tight={p_tight} &lt; 0.5</span>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:5}}>
+                    <svg width={26} height={10}><line x1={0} y1={5} x2={26} y2={5} stroke={C.green} strokeWidth={2} strokeDasharray="3 2"/></svg>
+                    <span>Code 4 — Lower bound: T·f·(1−exp(−n·D(q‖p))), p_inv={p_inv} &gt; 0.5</span>
+                  </div>
+                </div>
+                {p_tight>=0.5 && (
+                  <div style={{marginBottom:8,padding:"5px 10px",borderRadius:5,background:"rgba(248,81,73,0.08)",border:`1px solid ${C.red}`,fontSize:11,fontFamily:"monospace",color:C.red}}>
+                    ⚠ p_tight={p_tight} ≥ 0.5 — Code 3 tight bound requires p &lt; 0.5. Use Auto p_tight button.
+                  </div>
+                )}
+                {p_inv<=0.5 && (
+                  <div style={{marginBottom:8,padding:"5px 10px",borderRadius:5,background:"rgba(248,81,73,0.08)",border:`1px solid ${C.red}`,fontSize:11,fontFamily:"monospace",color:C.red}}>
+                    ⚠ p_inv={p_inv} ≤ 0.5 — Code 4 lower bound requires p &gt; 0.5.
+                  </div>
+                )}
+                {/* log10 scale so all three curves stay visible — Python uses scatter; we add log scale for readability */}
+                <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",marginBottom:6,opacity:0.8}}>
+                  Log₁₀ scale — all three curves are visible. Python's original scatter plots use linear scale per-snippet; log scale added here for comparison.
+                </div>
+                <ResponsiveContainer width="100%" height={420}>
+                  <LineChart data={wastedData} margin={{left:34,right:20,top:10,bottom:22}}>
+                    <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                    <XAxis dataKey="n" stroke={C.muted}
+                      tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
+                      label={{value:"n (validators)",position:"insideBottom",offset:-10,fill:C.muted,fontSize:12}}/>
+                    <YAxis stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                      tickFormatter={v=>`10^${v.toFixed(0)}`}
+                      label={{value:"log₁₀(wasted slots/epoch)",angle:-90,position:"insideLeft",fill:C.muted,fontSize:9}}/>
+                    <Tooltip content={<CustomTT labelFmt={v=>`n=${v}`} valFmt={v=>`10^(${v?.toFixed(2)})`}/>}/>
+                    <Legend wrapperStyle={{fontSize:11,fontFamily:"monospace"}}/>
+                    <ReferenceLine y={Math.log10(T_epoch*f)} stroke={C.yellow} strokeDasharray="5 3"
+                      label={{value:`Tf=${Math.round(T_epoch*f).toLocaleString()}`,position:"insideRight",fill:C.yellow,fontSize:10}}/>
+                    <Line type="monotone" dataKey="log10_wasted" name="Code 2 — Basic upper bound"
+                      stroke={C.red} dot={{r:2,fill:C.red}} strokeWidth={2} connectNulls={false}/>
+                    <Line type="monotone" dataKey="log10_tight" name={`Code 3 — Tight upper (p=${p_tight})`}
+                      stroke={C.blue} dot={{r:2,fill:C.blue}} strokeWidth={2}
+                      strokeDasharray="5 2" connectNulls={false}/>
+                    <Line type="monotone" dataKey="log10_lower" name={`Code 4 — Lower bound (p=${p_inv})`}
+                      stroke={C.green} dot={{r:2,fill:C.green}} strokeWidth={2}
+                      strokeDasharray="3 2" connectNulls={false}/>
+                  </LineChart>
+                </ResponsiveContainer>
+                <div style={{marginTop:10,padding:"8px 12px",background:C.bg,borderRadius:7,
+                  border:`1px solid ${C.border}`,fontFamily:"monospace",fontSize:10,color:C.muted}}>
+                  <span style={{color:C.yellow}}>Code 3 p_tight</span>: Python hardcodes p = (1−(1−ε)^N) + 0.1. Use "Auto p_tight" button to match this exactly (p = {parseFloat(Math.min(0.499,(1-Math.pow(1-epsilon,NB))+0.1).toFixed(4))}).
+                  &nbsp;The +0.1 offset moves p away from the (1−(1−ε)^N_B) boundary.
+                  &nbsp;<span style={{color:C.yellow}}>Code 4 p_inv</span>: Python hardcodes p = 0.7. Adjust p_inv parameter to match your scenario.
+                </div>
+              </>
+            )}
+
+            {/* CHERNOFF BOUND — two separate panels matching Python's two plt.scatter() calls */}
+            {tab==="chernoff" && (
+              <>
+                <SecHead>Chernoff bounds — P(majority accepts bad block), both regimes</SecHead>
+                {(p_tight>=0.5 || p_inv<=0.5) && (
+                  <div style={{marginBottom:10,padding:"5px 10px",borderRadius:5,
+                    background:"rgba(210,153,34,0.08)",border:`1px solid ${C.yellow}`,
+                    fontSize:11,fontFamily:"monospace",color:C.yellow}}>
+                    ⚠ {p_tight>=0.5?`p_tight=${p_tight} must be < 0.5 for Code 3. `:""}{p_inv<=0.5?`p_inv=${p_inv} must be > 0.5 for Code 4.`:""}
+                  </div>
+                )}
+                {/* Two panels — each matches one Python plt.scatter() call */}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+
+                  {/* Left — Code 3: tight upper bound (p < 0.5, grey zone above red line) */}
+                  <div>
+                    <div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginBottom:4,textAlign:"center"}}>
+                      <span style={{color:C.blue}}>Code 3</span> — Tight <span style={{color:C.blue}}>upper</span> bound (p_tight={p_tight} &lt; 0.5)
+                    </div>
+                    <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",marginBottom:8,textAlign:"center",opacity:0.7}}>
+                      P(maj. accepts) ≤ (4p(1−p))^(n/2) &nbsp;·&nbsp; log₁₀ scale &nbsp;·&nbsp; grey zone
+                    </div>
+                    <ResponsiveContainer width="100%" height={340}>
+                      <LineChart data={chernoffData} margin={{left:22,right:10,top:8,bottom:28}}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                        <XAxis dataKey="n" stroke={C.muted}
+                          tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
+                          label={{value:"n (validators)",position:"insideBottom",offset:-14,fill:C.muted,fontSize:11}}/>
+                        <YAxis stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                          tickFormatter={v=>`10^${v.toFixed(0)}`}
+                          label={{value:"log₁₀(upper bound)",angle:-90,position:"insideLeft",fill:C.muted,fontSize:10}}/>
+                        <Tooltip content={<CustomTT labelFmt={v=>`n=${v}`} valFmt={v=>`10^(${v?.toFixed(2)})`}/>}/>
+                        <Line type="monotone" dataKey="log10_tight"
+                          name={`Code 3 (p=${p_tight})`}
+                          stroke={C.blue} dot={{r:3,fill:C.blue}} strokeWidth={2} connectNulls={false}/>
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* Right — Code 4: lower bound (p > 0.5, below red line) */}
+                  <div>
+                    <div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginBottom:4,textAlign:"center"}}>
+                      <span style={{color:C.red}}>Code 4</span> — Chernoff <span style={{color:C.red}}>lower</span> bound (p_inv={p_inv} &gt; 0.5)
+                    </div>
+                    <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",marginBottom:8,textAlign:"center",opacity:0.7}}>
+                      P(maj. accepts) ≥ 1−exp(−n·KL(q‖p)) &nbsp;·&nbsp; linear scale &nbsp;·&nbsp; below red line
+                    </div>
+                    <ResponsiveContainer width="100%" height={340}>
+                      <LineChart data={chernoffData} margin={{left:20,right:10,top:8,bottom:28}}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                        <XAxis dataKey="n" stroke={C.muted}
+                          tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
+                          label={{value:"n (validators)",position:"insideBottom",offset:-14,fill:C.muted,fontSize:11}}/>
+                        <YAxis stroke={C.muted} tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
+                          domain={[0,1]} tickFormatter={v=>v.toFixed(2)}
+                          label={{value:"P(majority accepts bad block)",angle:-90,position:"insideLeft",fill:C.muted,fontSize:9}}/>
+                        <Tooltip content={<CustomTT labelFmt={v=>`n=${v}`} valFmt={v=>v?.toFixed(5)}/>}/>
+                        <ReferenceLine y={0.5} stroke={C.yellow} strokeDasharray="5 3"
+                          label={{value:"0.5",position:"insideRight",fill:C.yellow,fontSize:10}}/>
+                        <Line type="monotone" dataKey="lower_bound"
+                          name={`Code 4 (p=${p_inv})`}
+                          stroke={C.red} dot={{r:3,fill:C.red}} strokeWidth={2} connectNulls={false}/>
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Formula notes */}
+                <div style={{marginTop:12,padding:"8px 12px",background:C.bg,borderRadius:7,
+                  border:`1px solid ${C.border}`,fontFamily:"monospace",fontSize:10,color:C.muted}}>
+                  <div style={{marginBottom:3}}>
+                    <span style={{color:C.blue}}>Code 3</span>: (4p(1−p))^(n/2) = exp(−n·KL(1/2‖p)) — tight Chernoff upper bound for grey zone (p &lt; 0.5).
+                    Python: p = (1−(1−ε)^N)+0.1 ≈ {parseFloat(Math.min(0.499,(1-Math.pow(1-epsilon,NB))+0.1).toFixed(4))} for current ε,NB. Use "Auto p_tight" to match.
+                  </div>
+                  <div>
+                    <span style={{color:C.red}}>Code 4</span>: 1−exp(−n·KL(q‖p)), q=(⌈n/2⌉−1)/n — Chernoff lower bound below red line (p &gt; 0.5). Python: p=0.7. Set p_inv accordingly.
+                  </div>
+                  <div style={{marginTop:4,color:C.yellow}}>
+                    ✓ Split into two panels to match Python's two separate plt.scatter() calls. Code 3 on log scale (values decay to ~10⁻⁸ at n=100). Code 4 on linear scale (grows toward 1).
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* BLOCKCHAIN — Probability + Median Time (matches Python Code 1 two panels) */}
+            {tab==="median" && (
+              <>
+                <SecHead>Blockchain analysis — probability of invalid block adoption &amp; median time</SecHead>
+                <div style={{fontSize:11,color:C.muted,marginBottom:14}}>
+                  ε={epsilon}, f≈{f.toFixed(4)} &nbsp;·&nbsp; SPY=31,536,000 (365 days, matching Python) &nbsp;·&nbsp; NB=1 (single-blob blockchain view)
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+
+                  {/* Left: y1 = f·2^n·ε^⌈n/2⌉  — prob. invalid block accepted by majority */}
+                  <div>
+                    <div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginBottom:6,textAlign:"center"}}>
+                      P(invalid block accepted by maj.) = f·2ⁿ·ε^⌈n/2⌉ &nbsp;·&nbsp; log₁₀ scale
+                    </div>
+                    <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",marginBottom:8,opacity:0.7,textAlign:"center"}}>
+                      y1 = f·2ⁿ·ε^⌈n/2⌉ — slot probability × network acceptance bound
+                    </div>
+                    <ResponsiveContainer width="100%" height={340}>
+                      <LineChart data={blockchainData} margin={{left:22,right:10,top:8,bottom:28}}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                        <XAxis dataKey="n" stroke={C.muted}
+                          tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
+                          label={{value:"n (validators)",position:"insideBottom",offset:-14,fill:C.muted,fontSize:11}}/>
+                        <YAxis stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                          tickFormatter={v=>`10^${v.toFixed(0)}`}
+                          label={{value:"log₁₀(prob.)",angle:-90,position:"insideLeft",fill:C.muted,fontSize:10}}/>
+                        <Tooltip content={<CustomTT labelFmt={v=>`n=${v}`} valFmt={v=>`10^(${v?.toFixed(1)})`}/>}/>
+                        <Line type="monotone" dataKey="log10_y1" name="P(invalid accepted)"
+                          stroke={C.red} dot={false} strokeWidth={2} connectNulls={false}/>
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+
+                  {/* Right: y2 = ⌈ln(2)·(2^(−n)·ε^(−⌈n/2⌉) − f)/f⌉/SPY — median time (corrected formula) */}
+                  <div>
+                    <div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginBottom:6,textAlign:"center"}}>
+                      Median time T₁/₂ to first invalid block (years) &nbsp;·&nbsp; log₁₀ scale
+                    </div>
+                    <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",marginBottom:8,opacity:0.7,textAlign:"center"}}>
+                      y2 = ⌈ln(2)·(2^(−n)·ε^(−⌈n/2⌉) − f)/f⌉ / SPY &nbsp;·&nbsp; corrected from previous (−f term added)
+                    </div>
+                    <ResponsiveContainer width="100%" height={340}>
+                      <LineChart data={blockchainData} margin={{left:22,right:10,top:8,bottom:28}}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                        <XAxis dataKey="n" stroke={C.muted}
+                          tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
+                          label={{value:"n (validators)",position:"insideBottom",offset:-14,fill:C.muted,fontSize:11}}/>
+                        <YAxis stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                          tickFormatter={v=>`10^${v.toFixed(0)}`}
+                          label={{value:"log₁₀(years)",angle:-90,position:"insideLeft",fill:C.muted,fontSize:10}}/>
+                        <Tooltip content={<CustomTT labelFmt={v=>`n=${v}`} valFmt={v=>`10^(${v?.toFixed(1)}) yrs`}/>}/>
+                        <ReferenceLine y={Math.log10(26.7e9)} stroke={C.yellow} strokeDasharray="5 3"
+                          label={{value:"Age of Universe",position:"insideRight",fill:C.yellow,fontSize:10}}/>
+                        <Line type="monotone" dataKey="log10_y2" name="Median time T₁/₂"
+                          stroke={C.blue} dot={false} strokeWidth={2} connectNulls={false}/>
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Formula note */}
+                <div style={{marginTop:14,padding:"10px 14px",background:C.bg,borderRadius:7,
+                  border:`1px solid ${C.border}`,fontFamily:"monospace",fontSize:11,color:C.muted}}>
+                  <div style={{color:C.text,marginBottom:5,fontWeight:700}}>Formula notes (matching Python Code 1)</div>
+                  <div style={{marginBottom:3}}>
+                    y1 = f · 2ⁿ · ε^⌈n/2⌉ &nbsp;·&nbsp; upper bound on prob. invalid block adopted per slot
+                  </div>
+                  <div style={{marginBottom:3}}>
+                    y2 = ⌈ ln(2) · (2^(−n) · ε^(−⌈n/2⌉) − f) / f ⌉ / SPY &nbsp;·&nbsp;
+                    <span style={{color:C.green}}>corrected</span> vs. previous version which used ln(2)·2^(−n)·ε^(−⌈n/2⌉)/f/SPY (missing −f)
+                  </div>
+                  <div style={{color:C.yellow,marginTop:4,fontSize:10}}>
+                    SPY = 31,536,000 s (365 days exactly, matching Python). Previous version used 365.25 days — negligible but now consistent.
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* ════ BLOCK BUILDER ════ */}
+            {tab==="builder" && (
+              <>
+                <SecHead>Block builder — hitting time τ_{{N_B,q}}: blobs to inspect before N_B are accepted</SecHead>
+                <div style={{fontSize:11,color:C.muted,marginBottom:12}}>
+                  τ_{{N_B,q}} = min{{T : P(τ_{{N_B}} ≤ T) ≥ q}} &nbsp;·&nbsp; Approx: τ ≈ (N_B + z_q·√N_B) / p
+                  &nbsp;·&nbsp; z_{{0.99}}=2.3263, z_{{0.999}}=3.0902
+                </div>
+
+                {/* q confidence selector */}
+                <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:14,flexWrap:"wrap"}}>
+                  <span style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>Confidence q:</span>
+                  {[0.90,0.95,0.99,0.999].map(q=>(
+                    <button key={q} onClick={()=>setQ_conf(q)} style={{
+                      background:q_conf===q?C.blue:"transparent", color:q_conf===q?"#000":C.blue,
+                      border:`1px solid ${C.blue}`, borderRadius:5,
+                      padding:"4px 12px", cursor:"pointer", fontSize:11, fontFamily:"monospace",
+                      fontWeight:q_conf===q?700:400,
+                    }}>{q}</button>
+                  ))}
+                  <span style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>
+                    z_q = {zQuantile(q_conf).toFixed(4)}
+                    &nbsp;·&nbsp; ε={epsilon}
+                  </span>
+                </div>
+
+                {/* Two panels side by side: Unrecoverable | Recoverable */}
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
+
+                  {/* LEFT — Unrecoverable: p = ε, log₁₀ scale */}
+                  <div>
+                    <div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginBottom:5,textAlign:"center"}}>
+                      <span style={{color:C.red}}>Unrecoverable</span> (p = ε) — τ_{{N_B,q}} vs N_B &nbsp;·&nbsp; log₁₀ scale
+                    </div>
+                    <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",marginBottom:8,opacity:0.7,textAlign:"center"}}>
+                      data is unrecoverable → P(n_A≥τ|N_A) ≤ ε → each blob accepted w/ prob p=ε
+                    </div>
+                    {/* Legend */}
+                    <div style={{display:"flex",gap:12,marginBottom:8,flexWrap:"wrap",justifyContent:"center",fontSize:10,fontFamily:"monospace",color:C.muted}}>
+                      {EPS_VALS.map((eps,ki)=>(
+                        <div key={ki} style={{display:"flex",alignItems:"center",gap:4}}>
+                          <svg width={22} height={8}><line x1={0} y1={4} x2={22} y2={4} stroke={EPS_COLS[ki]} strokeWidth={2}/></svg>
+                          <span style={{color:EPS_COLS[ki]}}>ε={EPS_LBLS[ki]}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <ResponsiveContainer width="100%" height={340}>
+                      <LineChart data={builderData} margin={{left:22,right:10,top:8,bottom:28}}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                        <XAxis dataKey="NB" stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                          label={{value:"N_B (blobs per block)",position:"insideBottom",offset:-14,fill:C.muted,fontSize:10}}/>
+                        <YAxis stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                          tickFormatter={v=>`10^${v.toFixed(0)}`}
+                          label={{value:"log₁₀(τ_{N_B,q})",angle:-90,position:"insideLeft",fill:C.muted,fontSize:10}}/>
+                        <Tooltip content={<CustomTT labelFmt={v=>`N_B=${v}`} valFmt={v=>`10^(${v?.toFixed(2)})`}/>}/>
+                        {EPS_VALS.map((_,ki)=>(
+                          <Line key={ki} type="monotone" dataKey={`u_log10_${ki}`}
+                            name={`ε=${EPS_LBLS[ki]}`} stroke={EPS_COLS[ki]}
+                            dot={{r:3,fill:EPS_COLS[ki]}} strokeWidth={2} connectNulls={false}/>
+                        ))}
+                        <Legend wrapperStyle={{fontSize:10,fontFamily:"monospace"}}/>
+                      </LineChart>
+                    </ResponsiveContainer>
+                    <div style={{marginTop:6,padding:"5px 10px",background:C.bg,borderRadius:5,
+                      border:`1px solid ${C.border}`,fontSize:10,fontFamily:"monospace",color:C.muted}}>
+                      τ ≈ N_B/ε + z_q·√N_B/ε &nbsp;·&nbsp; dominant term N_B/ε grows linearly in N_B &nbsp;·&nbsp;
+                      <span style={{color:C.yellow}}>top curve = ε=10⁻⁴</span>
+                    </div>
+                  </div>
+
+                  {/* RIGHT — Recoverable: p = 1−ε, linear scale */}
+                  <div>
+                    <div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginBottom:5,textAlign:"center"}}>
+                      <span style={{color:C.green}}>Recoverable</span> (p = 1−ε) — τ_{{N_B,q}} vs N_B &nbsp;·&nbsp; linear scale
+                    </div>
+                    <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",marginBottom:8,opacity:0.7,textAlign:"center"}}>
+                      data is recoverable → P(n_A≥τ|N_A) ≥ 1−ε → each blob accepted w/ prob p=1−ε
+                    </div>
+                    {/* Legend */}
+                    <div style={{display:"flex",gap:12,marginBottom:8,flexWrap:"wrap",justifyContent:"center",fontSize:10,fontFamily:"monospace",color:C.muted}}>
+                      {EPS_VALS.map((eps,ki)=>(
+                        <div key={ki} style={{display:"flex",alignItems:"center",gap:4}}>
+                          <svg width={22} height={8}><line x1={0} y1={4} x2={22} y2={4} stroke={EPS_COLS[ki]} strokeWidth={2}/></svg>
+                          <span style={{color:EPS_COLS[ki]}}>p=1−{EPS_LBLS[ki]}</span>
+                        </div>
+                      ))}
+                      <div style={{display:"flex",alignItems:"center",gap:4}}>
+                        <svg width={22} height={8}><line x1={0} y1={4} x2={22} y2={4} stroke={C.muted} strokeWidth={1.5} strokeDasharray="4 2"/></svg>
+                        <span>τ=N_B (lower bound)</span>
+                      </div>
+                    </div>
+                    <ResponsiveContainer width="100%" height={340}>
+                      <LineChart data={builderData} margin={{left:30,right:10,top:8,bottom:28}}>
+                        <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                        <XAxis dataKey="NB" stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                          label={{value:"N_B (blobs per block)",position:"insideBottom",offset:-14,fill:C.muted,fontSize:10}}/>
+                        <YAxis stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                          tickFormatter={v=>v>=1000?`${(v/1000).toFixed(1)}k`:v.toFixed(0)}
+                          label={{value:"τ_{N_B,q} (blobs to inspect)",angle:-90,position:"insideLeft",fill:C.muted,fontSize:9}}/>
+                        <Tooltip content={<CustomTT labelFmt={v=>`N_B=${v}`} valFmt={v=>v?.toFixed(0)}/>}/>
+                        {/* τ = NB reference (ideal lower bound) */}
+                        <Line type="monotone" dataKey="NB"
+                          name="τ = N_B (ideal)" stroke={C.muted} dot={false} strokeWidth={1.5}
+                          strokeDasharray="4 2" connectNulls={false}/>
+                        {EPS_VALS.map((_,ki)=>(
+                          <Line key={ki} type="monotone" dataKey={`r_approx_${ki}`}
+                            name={`p=1-${EPS_LBLS[ki]}`} stroke={EPS_COLS[ki]}
+                            dot={{r:3,fill:EPS_COLS[ki]}} strokeWidth={2} connectNulls={false}/>
+                        ))}
+                        <Legend wrapperStyle={{fontSize:10,fontFamily:"monospace"}}/>
+                      </LineChart>
+                    </ResponsiveContainer>
+                    <div style={{marginTop:6,padding:"5px 10px",background:C.bg,borderRadius:5,
+                      border:`1px solid ${C.border}`,fontSize:10,fontFamily:"monospace",color:C.muted}}>
+                      τ ≈ N_B/(1−ε) + z_q·√N_B/(1−ε) ≈ N_B + z_q·√N_B for small ε &nbsp;·&nbsp;
+                      <span style={{color:C.green}}>all curves converge near τ = N_B</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Grey zone — full width */}
+                <div style={{borderTop:`1px solid ${C.border}`,paddingTop:16}}>
+                  <div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginBottom:5,textAlign:"center"}}>
+                    <span style={{color:C.purple}}>Grey zone</span> (K+1 ≤ N_A &lt; K+Δ) — fixed p ∈ {{0.2, 0.3, 0.5, 0.7}} &nbsp;·&nbsp; log₁₀ scale
+                  </div>
+                  <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",marginBottom:10,opacity:0.7,textAlign:"center"}}>
+                    P(n_A ≥ τ | N_A) ∈ (ε, 1−ε) &nbsp;·&nbsp; τ_{N_B,q}(1−ε) &lt; τ_{{N_B,q}}(p) &lt; τ_{{N_B,q}}(ε)
+                  </div>
+                  {/* Legend */}
+                  <div style={{display:"flex",gap:16,marginBottom:10,flexWrap:"wrap",justifyContent:"center",fontSize:11,fontFamily:"monospace",color:C.muted}}>
+                    {PGREY_VALS.map((p,pi)=>(
+                      <div key={pi} style={{display:"flex",alignItems:"center",gap:5}}>
+                        <svg width={26} height={10}><line x1={0} y1={5} x2={26} y2={5} stroke={PGREY_COLS[pi]} strokeWidth={2}/></svg>
+                        <span style={{color:PGREY_COLS[pi]}}>p = {p}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <ResponsiveContainer width="100%" height={320}>
+                    <LineChart data={builderData} margin={{left:22,right:20,top:8,bottom:28}}>
+                      <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
+                      <XAxis dataKey="NB" stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                        label={{value:"N_B (blobs per block)",position:"insideBottom",offset:-14,fill:C.muted,fontSize:10}}/>
+                      <YAxis stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
+                        tickFormatter={v=>`10^${v.toFixed(0)}`}
+                        label={{value:"log₁₀(τ_{N_B,q})",angle:-90,position:"insideLeft",fill:C.muted,fontSize:10}}/>
+                      <Tooltip content={<CustomTT labelFmt={v=>`N_B=${v}`} valFmt={v=>`10^(${v?.toFixed(2)})`}/>}/>
+                      <Legend wrapperStyle={{fontSize:11,fontFamily:"monospace"}}/>
+                      {PGREY_VALS.map((_,pi)=>(
+                        <Line key={pi} type="monotone" dataKey={`g_log10_${pi}`}
+                          name={`p=${PGREY_VALS[pi]}`} stroke={PGREY_COLS[pi]}
+                          dot={{r:3,fill:PGREY_COLS[pi]}} strokeWidth={2} connectNulls={false}/>
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+
+                {/* Formula reference box */}
+                <div style={{marginTop:16,padding:"12px 16px",background:C.bg,borderRadius:8,
+                  border:`1px solid ${C.border}`,fontFamily:"monospace",fontSize:11,color:C.muted}}>
+                  <div style={{color:C.text,marginBottom:8,fontWeight:700}}>Negative-binomial hitting time τ_{{N_B,q}}</div>
+                  <div style={{marginBottom:5}}>
+                    <span style={{color:C.blue}}>PMF:</span>
+                    &nbsp;P(τ_{{N_B}}=t) = C(t−1, N_B−1) · p^{{N_B}} · (1−p)^{{t−N_B}}, t = N_B, N_B+1, …
+                  </div>
+                  <div style={{marginBottom:5}}>
+                    <span style={{color:C.green}}>q-quantile:</span>
+                    &nbsp;τ_{{N_B,q}} = min{{T ≥ N_B : Σ_{{t=N_B}}^T P(τ_{{N_B}}=t) ≥ q}}
+                  </div>
+                  <div style={{marginBottom:5}}>
+                    <span style={{color:C.yellow}}>Approximation:</span>
+                    &nbsp;τ_{{N_B,q}} ≈ (N_B + z_q·√N_B) / p &nbsp;(accurate for N_B ≥ 10)
+                  </div>
+                  <div style={{marginBottom:5}}>
+                    <span style={{color:C.purple}}>z_q values:</span>
+                    &nbsp;z_{{0.90}}=1.2816, z_{{0.95}}=1.6449, z_{{0.99}}=2.3263, z_{{0.999}}=3.0902
+                  </div>
+                  <div style={{marginTop:8,padding:"6px 10px",background:C.panel,borderRadius:5,
+                    border:`1px solid ${C.border}`,fontSize:10,color:C.muted}}>
+                    <span style={{color:C.blue}}>Interpretation:</span>
+                    &nbsp;τ_{{N_B,q}} is the number of blobs the builder must inspect (and sample) to fill a block with
+                    N_B accepted blobs, with confidence q. For unrecoverable data (p=ε), τ ≈ N_B/ε — the builder
+                    wastes ≈1/ε attempts per accepted blob. For recoverable data (p≈1), τ ≈ N_B — almost no waste.
+                    Current ε={epsilon}: τ ≈ N_B/ε = {(1/epsilon).toFixed(0)}·N_B (unrecoverable),
+                    τ ≈ N_B (recoverable).
+                  </div>
+                </div>
+              </>
+            )}
+
+          </div>
+
+          <div style={{marginTop:14,fontSize:10,color:C.muted,fontFamily:"monospace",textAlign:"center",opacity:0.45}}>
+            DA SAMPLING ANALYSIS · HYPERGEOMETRIC MODEL · N={N} COLUMNS · K+1 RECOVERY THRESHOLD
+          </div>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById("root"));
+    root.render(<DACalculator />);
+  </script>
+</body>
+</html>
