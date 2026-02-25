@@ -1238,10 +1238,10 @@
             {/* ════ BLOCK BUILDER ════ */}
             {tab==="builder" && (
               <>
-                <SecHead>Block builder — hitting time τ_{{N_B,q}}: blobs to inspect before N_B are accepted</SecHead>
+                <SecHead>Block builder — hitting time τ&#8336;&#8320;&#8346;&#8329;&#8342;&#8329;: blobs to inspect before N_B are accepted</SecHead>
                 <div style={{fontSize:11,color:C.muted,marginBottom:12}}>
-                  τ_{{N_B,q}} = min{{T : P(τ_{{N_B}} ≤ T) ≥ q}} &nbsp;·&nbsp; Approx: τ ≈ (N_B + z_q·√N_B) / p
-                  &nbsp;·&nbsp; z_{{0.99}}=2.3263, z_{{0.999}}=3.0902
+                  τ&#8336;&#8320;&#8346;&#8329;&#8342;&#8329; = min&#123;T : P(τ&#8336;&#8320;&#8346; ≤ T) ≥ q&#125; &nbsp;·&nbsp; Approx: τ ≈ (N_B + z_q·√N_B) / p
+                  &nbsp;·&nbsp; z&#8320;&#8329;&#8329;=2.3263, z&#8320;&#8329;&#8329;&#8329;=3.0902
                 </div>
 
                 {/* q confidence selector */}
@@ -1267,7 +1267,7 @@
                   {/* LEFT — Unrecoverable: p = ε, log₁₀ scale */}
                   <div>
                     <div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginBottom:5,textAlign:"center"}}>
-                      <span style={{color:C.red}}>Unrecoverable</span> (p = ε) — τ_{{N_B,q}} vs N_B &nbsp;·&nbsp; log₁₀ scale
+                      <span style={{color:C.red}}>Unrecoverable</span> (p = ε) — τ&#8336;&#8320;&#8346;&#8329; vs N_B &nbsp;·&nbsp; log₁₀ scale
                     </div>
                     <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",marginBottom:8,opacity:0.7,textAlign:"center"}}>
                       data is unrecoverable → P(n_A≥τ|N_A) ≤ ε → each blob accepted w/ prob p=ε
@@ -1288,7 +1288,7 @@
                           label={{value:"N_B (blobs per block)",position:"insideBottom",offset:-14,fill:C.muted,fontSize:10}}/>
                         <YAxis stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
                           tickFormatter={v=>`10^${v.toFixed(0)}`}
-                          label={{value:"log₁₀(τ_{N_B,q})",angle:-90,position:"insideLeft",fill:C.muted,fontSize:10}}/>
+                          label={{value:"log₁₀(τ_NB,q)",angle:-90,position:"insideLeft",fill:C.muted,fontSize:10}}/>
                         <Tooltip content={<CustomTT labelFmt={v=>`N_B=${v}`} valFmt={v=>`10^(${v?.toFixed(2)})`}/>}/>
                         {EPS_VALS.map((_,ki)=>(
                           <Line key={ki} type="monotone" dataKey={`u_log10_${ki}`}
@@ -1308,7 +1308,7 @@
                   {/* RIGHT — Recoverable: p = 1−ε, linear scale */}
                   <div>
                     <div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginBottom:5,textAlign:"center"}}>
-                      <span style={{color:C.green}}>Recoverable</span> (p = 1−ε) — τ_{{N_B,q}} vs N_B &nbsp;·&nbsp; linear scale
+                      <span style={{color:C.green}}>Recoverable</span> (p = 1−ε) — τ&#8336;&#8320;&#8346;&#8329; vs N_B &nbsp;·&nbsp; linear scale
                     </div>
                     <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",marginBottom:8,opacity:0.7,textAlign:"center"}}>
                       data is recoverable → P(n_A≥τ|N_A) ≥ 1−ε → each blob accepted w/ prob p=1−ε
@@ -1358,10 +1358,10 @@
                 {/* Grey zone — full width */}
                 <div style={{borderTop:`1px solid ${C.border}`,paddingTop:16}}>
                   <div style={{fontSize:11,color:C.muted,fontFamily:"monospace",marginBottom:5,textAlign:"center"}}>
-                    <span style={{color:C.purple}}>Grey zone</span> (K+1 ≤ N_A &lt; K+Δ) — fixed p ∈ {{0.2, 0.3, 0.5, 0.7}} &nbsp;·&nbsp; log₁₀ scale
+                    <span style={{color:C.purple}}>Grey zone</span> (K+1 ≤ N_A &lt; K+Δ) — fixed p ∈ &#123;0.2, 0.3, 0.5, 0.7&#125; &nbsp;·&nbsp; log₁₀ scale
                   </div>
                   <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",marginBottom:10,opacity:0.7,textAlign:"center"}}>
-                    P(n_A ≥ τ | N_A) ∈ (ε, 1−ε) &nbsp;·&nbsp; τ_{N_B,q}(1−ε) &lt; τ_{{N_B,q}}(p) &lt; τ_{{N_B,q}}(ε)
+                    P(n_A ≥ τ | N_A) ∈ (ε, 1−ε) &nbsp;·&nbsp; τ&#8336;&#8320;&#8346;&#8329;(1−ε) &lt; τ&#8336;&#8320;&#8346;&#8329;(p) &lt; τ&#8336;&#8320;&#8346;&#8329;(ε)
                   </div>
                   {/* Legend */}
                   <div style={{display:"flex",gap:16,marginBottom:10,flexWrap:"wrap",justifyContent:"center",fontSize:11,fontFamily:"monospace",color:C.muted}}>
@@ -1394,27 +1394,27 @@
                 {/* Formula reference box */}
                 <div style={{marginTop:16,padding:"12px 16px",background:C.bg,borderRadius:8,
                   border:`1px solid ${C.border}`,fontFamily:"monospace",fontSize:11,color:C.muted}}>
-                  <div style={{color:C.text,marginBottom:8,fontWeight:700}}>Negative-binomial hitting time τ_{{N_B,q}}</div>
+                  <div style={{color:C.text,marginBottom:8,fontWeight:700}}>Negative-binomial hitting time τ_NB,q</div>
                   <div style={{marginBottom:5}}>
                     <span style={{color:C.blue}}>PMF:</span>
-                    &nbsp;P(τ_{{N_B}}=t) = C(t−1, N_B−1) · p^{{N_B}} · (1−p)^{{t−N_B}}, t = N_B, N_B+1, …
+                    &nbsp;P(τ&#8336;&#8320;&#8346;=t) = C(t−1, N_B−1) · p^N_B · (1−p)^(t−N_B), t = N_B, N_B+1, …
                   </div>
                   <div style={{marginBottom:5}}>
                     <span style={{color:C.green}}>q-quantile:</span>
-                    &nbsp;τ_{{N_B,q}} = min{{T ≥ N_B : Σ_{{t=N_B}}^T P(τ_{{N_B}}=t) ≥ q}}
+                    &nbsp;τ&#8336;&#8320;&#8346;&#8329; = min&#123;T ≥ N_B : Σ P(τ&#8336;&#8320;&#8346;=t) ≥ q&#125;
                   </div>
                   <div style={{marginBottom:5}}>
                     <span style={{color:C.yellow}}>Approximation:</span>
-                    &nbsp;τ_{{N_B,q}} ≈ (N_B + z_q·√N_B) / p &nbsp;(accurate for N_B ≥ 10)
+                    &nbsp;τ&#8336;&#8320;&#8346;&#8329; ≈ (N_B + z_q·√N_B) / p &nbsp;(accurate for N_B ≥ 10)
                   </div>
                   <div style={{marginBottom:5}}>
                     <span style={{color:C.purple}}>z_q values:</span>
-                    &nbsp;z_{{0.90}}=1.2816, z_{{0.95}}=1.6449, z_{{0.99}}=2.3263, z_{{0.999}}=3.0902
+                    &nbsp;z&#8320;&#8329;&#8320;=1.2816, z&#8320;&#8329;&#8325;=1.6449, z&#8320;&#8329;&#8329;=2.3263, z&#8320;&#8329;&#8329;&#8329;=3.0902
                   </div>
                   <div style={{marginTop:8,padding:"6px 10px",background:C.panel,borderRadius:5,
                     border:`1px solid ${C.border}`,fontSize:10,color:C.muted}}>
                     <span style={{color:C.blue}}>Interpretation:</span>
-                    &nbsp;τ_{{N_B,q}} is the number of blobs the builder must inspect (and sample) to fill a block with
+                    &nbsp;τ&#8336;&#8320;&#8346;&#8329; is the number of blobs the builder must inspect to fill a block with
                     N_B accepted blobs, with confidence q. For unrecoverable data (p=ε), τ ≈ N_B/ε — the builder
                     wastes ≈1/ε attempts per accepted blob. For recoverable data (p≈1), τ ≈ N_B — almost no waste.
                     Current ε={epsilon}: τ ≈ N_B/ε = {(1/epsilon).toFixed(0)}·N_B (unrecoverable),
