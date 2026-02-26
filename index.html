@@ -163,6 +163,39 @@
       return count;
     }
 
+    // Simulate negative binomial hitting time — returns empirical q-quantile
+    // Uses Int32Array for speed; caps draws to avoid infinite loops for small p
+    function simNegBin(NB, p, trials, q) {
+      if (p <= 0 || p >= 1 || NB < 1) return null;
+      const avgDraws = NB / p;
+      if (avgDraws > 2e6) return null; // infeasible in browser
+      const maxDraws = Math.min(Math.ceil(20 * avgDraws), 5000000);
+      const samples = new Int32Array(trials);
+      for (let t = 0; t < trials; t++) {
+        let successes = 0, draws = 0;
+        while (successes < NB && draws < maxDraws) {
+          if (Math.random() < p) successes++;
+          draws++;
+        }
+        samples[t] = draws;
+      }
+      samples.sort();
+      return samples[Math.min(Math.ceil(q * trials) - 1, trials - 1)];
+    }
+
+    function simMajority(n, p, trials) {
+      if (p <= 0 || !isFinite(p)) return 0;
+      if (p >= 1) return 1;
+      const half = Math.ceil(n / 2);
+      let count = 0;
+      for (let t = 0; t < trials; t++) {
+        let s = 0;
+        for (let i = 0; i < n; i++) if (Math.random() < p) s++;
+        if (s >= half) count++;
+      }
+      return count / trials;
+    }
+
     // ─── Design tokens ───────────────────────────────────────────────────────────
     const C = {
       bg:"#0d1117", panel:"#161b22", panel2:"#1c2128", border:"#30363d",
@@ -266,7 +299,20 @@
       const [simData,     setSimData]     = useState(null);
       const [simRunning,  setSimRunning]  = useState(false);
       const [simTrials,   setSimTrials]   = useState(200);
-      const [q_conf,      setQ_conf]      = useState(0.99);
+      const [q_conf,        setQ_conf]        = useState(0.99);
+      const [bSimTrials,    setBSimTrials]    = useState(100);
+      const [builderSimData,setBuilderSimData] = useState(null);
+      const [bSimRunning,   setBSimRunning]   = useState(false);
+      const [errSimData,     setErrSimData]    = useState(null);
+      const [errSimRunning,  setErrSimRunning] = useState(false);
+      const [mdSimData,      setMdSimData]     = useState(null);
+      const [mdSimRunning,   setMdSimRunning]  = useState(false);
+      const [netSimData,     setNetSimData]    = useState(null);
+      const [netSimRunning,  setNetSimRunning] = useState(false);
+      const [wastedSimData,  setWastedSimData] = useState(null);
+      const [wastedSimRunning,setWastedSimRunning] = useState(false);
+      const [chernSimData,   setChernSimData]  = useState(null);
+      const [chernSimRunning,setChernSimRunning] = useState(false);
       const [tab, setTab] = useState("errors");
 
       const N = r * K;
@@ -497,6 +543,159 @@
         });
       }, [q_conf]);
 
+      // Builder simulation: runs NegBin MC for all panels
+      // Grey zone (all 4 p vals, always feasible) + Recoverable (all 4 eps, always fast)
+      // Unrecoverable: only eps=0.1 (larger NB/p is too slow for browser)
+      const runBuilderSim = useCallback(() => {
+        setBSimRunning(true);
+        setTimeout(() => {
+          const zq = zQuantile(q_conf);
+          const result = BUILDER_NB.map(nb => {
+            const row = { NB: nb };
+            // Grey zone — all 4 p values (p in 0.2..0.7, always feasible)
+            PGREY_VALS.forEach((p, pi) => {
+              const v = simNegBin(nb, p, bSimTrials, q_conf);
+              row[`g_sim_${pi}`]      = v ? parseFloat(v) : null;
+              row[`g_sim_log10_${pi}`]= v && v > 0 ? parseFloat(Math.log10(v).toFixed(3)) : null;
+            });
+            // Recoverable — p = 1-eps (p close to 1, always fast)
+            EPS_VALS.forEach((eps, ki) => {
+              const v = simNegBin(nb, 1 - eps, bSimTrials, q_conf);
+              row[`r_sim_${ki}`] = v ? parseFloat(v) : null;
+            });
+            // Unrecoverable — only eps=0.1 feasible (p=0.1, NB/p <= 10240)
+            const v_u = simNegBin(nb, EPS_VALS[0], bSimTrials, q_conf);
+            row[`u_sim_log10_0`] = v_u && v_u > 0 ? parseFloat(Math.log10(v_u).toFixed(3)) : null;
+            return row;
+          });
+          setBuilderSimData(result);
+          setBSimRunning(false);
+        }, 30);
+      }, [q_conf, bSimTrials]);
+
+      // Merge theory + sim data by NB key
+      const builderMerged = useMemo(() => {
+        if (!builderSimData) return builderData;
+        const simMap = new Map(builderSimData.map(d => [d.NB, d]));
+        return builderData.map(d => ({ ...d, ...(simMap.get(d.NB) || {}) }));
+      }, [builderData, builderSimData]);
+
+      const runErrSim = useCallback(()=>{
+        setErrSimRunning(true);
+        setTimeout(()=>{
+          const result = Array.from({length:S+1},(_,t)=>{
+            let ah=0,bh=0;
+            for(let i=0;i<simTrials;i++){
+              if(sampleHypergeometric(N,K,S)>=t) ah++;
+              if(sampleHypergeometric(N,K+Delta,S)<t) bh++;
+            }
+            const af=ah/simTrials,bf=bh/simTrials;
+            return{tau:t,
+              alpha_sim:af>0?parseFloat(Math.log10(af).toFixed(3)):null,
+              beta_sim: bf>0?parseFloat(Math.log10(bf).toFixed(3)):null};
+          });
+          setErrSimData(result); setErrSimRunning(false);
+        },30);
+      },[N,K,Delta,S,simTrials]);
+
+      const errorDataMerged = useMemo(()=>{
+        if(!errSimData) return errorData;
+        const m=new Map(errSimData.map(d=>[d.tau,d]));
+        return errorData.map(d=>({...d,...(m.get(d.tau)||{})}));
+      },[errorData,errSimData]);
+
+      const runMdSim = useCallback(()=>{
+        setMdSimRunning(true);
+        setTimeout(()=>{
+          const result = Array.from({length:S+1},(_,t)=>{
+            let ah=0; const bh={}; deltaArr.forEach(d=>{bh[d]=0;});
+            for(let i=0;i<simTrials;i++){
+              if(sampleHypergeometric(N,K,S)>=t) ah++;
+              deltaArr.forEach(d=>{if(sampleHypergeometric(N,K+d,S)<t) bh[d]++;});
+            }
+            const af=ah/simTrials;
+            const row={tau:t,alpha_sim:af>0?parseFloat(Math.log10(af).toFixed(3)):null};
+            deltaArr.forEach(d=>{const bf=bh[d]/simTrials;row[`beta_sim_${d}`]=bf>0?parseFloat(Math.log10(bf).toFixed(3)):null;});
+            return row;
+          });
+          setMdSimData(result); setMdSimRunning(false);
+        },30);
+      },[N,K,deltaArr,S,simTrials]);
+
+      const multiDeltaMerged = useMemo(()=>{
+        if(!mdSimData) return multiDeltaData;
+        const m=new Map(mdSimData.map(d=>[d.tau,d]));
+        return multiDeltaData.map(d=>({...d,...(m.get(d.tau)||{})}));
+      },[multiDeltaData,mdSimData]);
+
+      const runNetSim = useCallback(()=>{
+        setNetSimRunning(true);
+        setTimeout(()=>{
+          const result=Array.from({length:91},(_,i)=>{
+            const n=i+10; const row={n};
+            NB_VALS.forEach(nb=>{
+              const pu=Math.pow(epsilon,nb), pr=1-Math.pow(1-epsilon,nb);
+              const su=pu>1e-15?simMajority(n,pu,simTrials):0;
+              const sr=simMajority(n,pr,simTrials);
+              row[`unrec_sim_${nb}`]=su>0?parseFloat(Math.log10(su).toFixed(3)):null;
+              row[`rec_sim_${nb}`]=sr>0?parseFloat(Math.log10(sr).toFixed(3)):null;
+            });
+            return row;
+          });
+          setNetSimData(result); setNetSimRunning(false);
+        },30);
+      },[epsilon,simTrials]);
+
+      const networkMerged = useMemo(()=>{
+        if(!netSimData) return networkData;
+        const m=new Map(netSimData.map(d=>[d.n,d]));
+        return networkData.map(d=>({...d,...(m.get(d.n)||{})}));
+      },[networkData,netSimData]);
+
+      const runWastedSim = useCallback(()=>{
+        setWastedSimRunning(true);
+        setTimeout(()=>{
+          const pb=1-Math.pow(1-epsilon,NB), pt=Math.min(p_tight,0.499), pi=p_inv>0.5?p_inv:null;
+          const result=Array.from({length:91},(_,i)=>{
+            const n=i+10;
+            const s2=simMajority(n,pb,simTrials),s3=simMajority(n,pt,simTrials),s4=pi?simMajority(n,pi,simTrials):null;
+            const w2=T_epoch*f*s2,w3=T_epoch*f*s3,w4=pi?T_epoch*f*s4:null;
+            return{n,
+              log10_wasted_sim:w2>0?parseFloat(Math.log10(w2).toFixed(3)):null,
+              log10_tight_sim: w3>0?parseFloat(Math.log10(w3).toFixed(3)):null,
+              log10_lower_sim: w4&&w4>0?parseFloat(Math.log10(w4).toFixed(3)):null};
+          });
+          setWastedSimData(result); setWastedSimRunning(false);
+        },30);
+      },[epsilon,NB,T_epoch,f,p_tight,p_inv,simTrials]);
+
+      const wastedMerged = useMemo(()=>{
+        if(!wastedSimData) return wastedData;
+        const m=new Map(wastedSimData.map(d=>[d.n,d]));
+        return wastedData.map(d=>({...d,...(m.get(d.n)||{})}));
+      },[wastedData,wastedSimData]);
+
+      const runChernSim = useCallback(()=>{
+        setChernSimRunning(true);
+        setTimeout(()=>{
+          const pt=p_tight>0&&p_tight<0.5?p_tight:null, pi=p_inv>0.5?p_inv:null;
+          const result=Array.from({length:91},(_,i)=>{
+            const n=i+10;
+            const s3=pt?simMajority(n,pt,simTrials):null, s4=pi?simMajority(n,pi,simTrials):null;
+            return{n,
+              sim_tight:s3&&s3>0?parseFloat(Math.log10(s3).toFixed(3)):null,
+              sim_lower:s4!==null?parseFloat(s4.toFixed(6)):null};
+          });
+          setChernSimData(result); setChernSimRunning(false);
+        },30);
+      },[p_tight,p_inv,simTrials]);
+
+      const chernMerged = useMemo(()=>{
+        if(!chernSimData) return chernoffData;
+        const m=new Map(chernSimData.map(d=>[d.n,d]));
+        return chernoffData.map(d=>({...d,...(m.get(d.n)||{})}));
+      },[chernoffData,chernSimData]);
+
       const detectMerged = useMemo(()=>{
         if(!simData) return detectTheory;
         const map=new Map(simData.map(d=>[d.x,d.sim]));
@@ -583,13 +782,25 @@
             {tab==="errors" && (
               <>
                 <SecHead>α(τ) and β(τ,Δ) vs threshold τ — log₁₀ scale</SecHead>
-                <div style={{fontSize:11,color:C.muted,marginBottom:14}}>
+                <div style={{fontSize:11,color:C.muted,marginBottom:10}}>
                   K={K}, r={r}, N={N}, S={S}, Δ={Delta}
                   &nbsp;·&nbsp;<span style={{color:C.blue}}>α(τ)</span> = Type I (false positive at N_A=K)
                   &nbsp;·&nbsp;<span style={{color:C.red}}>β(τ,Δ)</span> = Type II (miss at N_A=K+Δ)
                 </div>
+                <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12,flexWrap:"wrap"}}>
+                  <label style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>Trials/τ:</label>
+                  <input type="number" value={simTrials} min={50} max={5000} step={50}
+                    onChange={e=>setSimTrials(Math.max(50,parseInt(e.target.value)||200))}
+                    style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:5,
+                      color:C.text,fontFamily:"monospace",fontSize:12,padding:"3px 7px",width:80,outline:"none"}}/>
+                  <Btn color={C.green} active={!!errSimData} onClick={runErrSim}>
+                    {errSimRunning?"Running…":errSimData?"Re-run Simulation":"▶ Run Simulation"}
+                  </Btn>
+                  {errSimData && <Btn color={C.red} active={false} onClick={()=>setErrSimData(null)}>✕ Clear</Btn>}
+                  {errSimData && <span style={{fontSize:11,color:C.green,fontFamily:"monospace"}}>✓ Squares = empirical α/β from {simTrials} hypergeometric draws/τ</span>}
+                </div>
                 <ResponsiveContainer width="100%" height={380}>
-                  <LineChart data={errorData} margin={{left:20,right:20,top:10,bottom:22}}>
+                  <ComposedChart data={errorDataMerged} margin={{left:20,right:20,top:10,bottom:22}}>
                     <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
                     <XAxis dataKey="tau" stroke={C.muted}
                       tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
@@ -601,9 +812,11 @@
                     <Legend wrapperStyle={{fontSize:11,fontFamily:"monospace"}}/>
                     <ReferenceLine x={tau} stroke={C.green} strokeDasharray="5 3"
                       label={{value:`τ=${tau}`,fill:C.green,fontSize:10}}/>
-                    <Line type="monotone" dataKey="alpha" name="α(τ)"   stroke={C.blue} dot={false} strokeWidth={2} connectNulls={false}/>
-                    <Line type="monotone" dataKey="beta"  name="β(τ,Δ)" stroke={C.red}  dot={false} strokeWidth={2} connectNulls={false}/>
-                  </LineChart>
+                    <Line type="monotone" dataKey="alpha" name="α theory" stroke={C.blue} dot={false} strokeWidth={2} connectNulls={false}/>
+                    <Line type="monotone" dataKey="beta"  name="β theory" stroke={C.red}  dot={false} strokeWidth={2} connectNulls={false}/>
+                    {errSimData&&<Scatter dataKey="alpha_sim" name="α sim" fill={C.blue} shape={p=>{const{cx,cy}=p;if(!cx||!cy)return null;return<rect x={cx-4} y={cy-4} width={8} height={8} fill={C.blue} opacity={0.85}/>}}/>}
+                    {errSimData&&<Scatter dataKey="beta_sim"  name="β sim" fill={C.red}  shape={p=>{const{cx,cy}=p;if(!cx||!cy)return null;return<rect x={cx-4} y={cy-4} width={8} height={8} fill={C.red}  opacity={0.85}/>}}/>}
+                  </ComposedChart>
                 </ResponsiveContainer>
               </>
             )}
@@ -722,6 +935,13 @@
                       color:C.text,fontFamily:"monospace",fontSize:12,padding:"4px 10px",width:240,outline:"none"}}/>
                   <span style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>K={K}, r={r}, N={N}, S={S}</span>
                 </div>
+                <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,flexWrap:"wrap"}}>
+                  <Btn color={C.green} active={!!mdSimData} onClick={runMdSim}>
+                    {mdSimRunning?"Running…":mdSimData?"Re-run Simulation":"▶ Run Simulation"}
+                  </Btn>
+                  {mdSimData&&<Btn color={C.red} active={false} onClick={()=>setMdSimData(null)}>✕ Clear</Btn>}
+                  {mdSimData&&<span style={{fontSize:11,color:C.green,fontFamily:"monospace"}}>✓ Squares = empirical α/β ({simTrials} draws/τ)</span>}
+                </div>
                 <div style={{display:"flex",gap:16,marginBottom:14,flexWrap:"wrap",fontSize:11,fontFamily:"monospace",color:C.muted}}>
                   <div style={{display:"flex",alignItems:"center",gap:5}}>
                     <svg width={26} height={10}><line x1={0} y1={5} x2={26} y2={5} stroke={C.blue} strokeWidth={2}/></svg>
@@ -735,7 +955,7 @@
                   ))}
                 </div>
                 <ResponsiveContainer width="100%" height={400}>
-                  <LineChart data={multiDeltaData} margin={{left:20,right:20,top:10,bottom:22}}>
+                  <ComposedChart data={multiDeltaMerged} margin={{left:20,right:20,top:10,bottom:22}}>
                     <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
                     <XAxis dataKey="tau" stroke={C.muted}
                       tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
@@ -746,12 +966,17 @@
                     <Tooltip content={<CustomTT labelFmt={v=>`τ=${v}`} valFmt={v=>`10^(${v?.toFixed(2)})`}/>}/>
                     <ReferenceLine x={tau} stroke={C.green} strokeDasharray="5 3"
                       label={{value:`τ=${tau}`,fill:C.green,fontSize:10}}/>
-                    <Line type="monotone" dataKey="alpha" name="α(τ)" stroke={C.blue} dot={false} strokeWidth={2.2} connectNulls={false}/>
+                    <Line type="monotone" dataKey="alpha" name="α theory" stroke={C.blue} dot={false} strokeWidth={2.2} connectNulls={false}/>
                     {deltaArr.map((d,i)=>(
-                      <Line key={d} type="monotone" dataKey={`beta_${d}`} name={`β(τ,Δ=${d})`}
+                      <Line key={`tl_${d}`} type="monotone" dataKey={`beta_${d}`} name={`β theory Δ=${d}`}
                         stroke={MULTI_DELTA_COLORS[i%5]} dot={false} strokeWidth={1.8} strokeDasharray="5 2" connectNulls={false}/>
                     ))}
-                  </LineChart>
+                    {mdSimData&&<Scatter dataKey="alpha_sim" name="α sim" fill={C.blue} shape={p=>{const{cx,cy}=p;if(!cx||!cy)return null;return<rect x={cx-4} y={cy-4} width={8} height={8} fill={C.blue} opacity={0.85}/>}}/>}
+                    {mdSimData&&deltaArr.map((d,i)=>(
+                      <Scatter key={`ms_${d}`} dataKey={`beta_sim_${d}`} name={`β sim Δ=${d}`} fill={MULTI_DELTA_COLORS[i%5]}
+                        shape={pp=>{const{cx,cy}=pp;if(!cx||!cy)return null;return<rect x={cx-4} y={cy-4} width={8} height={8} fill={MULTI_DELTA_COLORS[i%5]} opacity={0.85}/>}}/>
+                    ))}
+                  </ComposedChart>
                 </ResponsiveContainer>
               </>
             )}
@@ -917,6 +1142,13 @@
                   ) : null;
                 })()}
 
+                <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,flexWrap:"wrap"}}>
+                  <Btn color={C.green} active={!!netSimData} onClick={runNetSim}>
+                    {netSimRunning?"Running…":netSimData?"Re-run Simulation":"▶ Run Simulation"}
+                  </Btn>
+                  {netSimData&&<Btn color={C.red} active={false} onClick={()=>setNetSimData(null)}>✕ Clear</Btn>}
+                  {netSimData&&<span style={{fontSize:11,color:C.green,fontFamily:"monospace"}}>✓ Squares = simulated P(majority wrong) — should sit at or below theory bound</span>}
+                </div>
                 {/* NB color legend */}
                 <div style={{display:"flex",gap:18,marginBottom:14,flexWrap:"wrap",fontSize:11,fontFamily:"monospace",color:C.muted}}>
                   {NB_VALS.map((nb,i)=>(
@@ -936,7 +1168,7 @@
                       P(block valid for maj. | data <span style={{color:C.red}}>unrecover.</span>) = 2ⁿ·ε^(N_B·⌈n/2⌉)
                     </div>
                     <ResponsiveContainer width="100%" height={360}>
-                      <LineChart data={networkData} margin={{left:22,right:10,top:8,bottom:28}}>
+                      <ComposedChart data={networkMerged} margin={{left:22,right:10,top:8,bottom:28}}>
                         <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
                         <XAxis dataKey="n" stroke={C.muted}
                           tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
@@ -947,11 +1179,14 @@
                         <Tooltip content={<CustomTT labelFmt={v=>`n=${v}`} valFmt={v=>`10^(${v?.toFixed(1)})`}/>}/>
                         {NB_VALS.map((nb,i)=>(
                           <Line key={nb} type="monotone" dataKey={`unrec_${nb}`}
-                            name={`N_B=${nb}`} stroke={NB_COLORS[i]}
-                            dot={false} strokeWidth={2} connectNulls={false}/>
+                            name={`N_B=${nb}`} stroke={NB_COLORS[i]} dot={false} strokeWidth={2} connectNulls={false}/>
+                        ))}
+                        {netSimData&&NB_VALS.map((nb,i)=>(
+                          <Scatter key={`us_${nb}`} dataKey={`unrec_sim_${nb}`} name={`sim N_B=${nb}`} fill={NB_COLORS[i]}
+                            shape={p=>{const{cx,cy}=p;if(!cx||!cy)return null;return<rect x={cx-4} y={cy-4} width={8} height={8} fill={NB_COLORS[i]} opacity={0.85}/>}}/>
                         ))}
                         <Legend wrapperStyle={{fontSize:11,fontFamily:"monospace"}}/>
-                      </LineChart>
+                      </ComposedChart>
                     </ResponsiveContainer>
                   </div>
 
@@ -961,7 +1196,7 @@
                       P(block invalid for maj. | data <span style={{color:C.green}}>recover.</span>) = 2ⁿ·[1−(1−ε)^N_B]^⌈n/2⌉
                     </div>
                     <ResponsiveContainer width="100%" height={360}>
-                      <LineChart data={networkData} margin={{left:22,right:10,top:8,bottom:28}}>
+                      <ComposedChart data={networkMerged} margin={{left:22,right:10,top:8,bottom:28}}>
                         <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
                         <XAxis dataKey="n" stroke={C.muted}
                           tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
@@ -972,11 +1207,14 @@
                         <Tooltip content={<CustomTT labelFmt={v=>`n=${v}`} valFmt={v=>`10^(${v?.toFixed(1)})`}/>}/>
                         {NB_VALS.map((nb,i)=>(
                           <Line key={nb} type="monotone" dataKey={`rec_${nb}`}
-                            name={`N_B=${nb}`} stroke={NB_COLORS[i]}
-                            dot={false} strokeWidth={2} connectNulls={false}/>
+                            name={`N_B=${nb}`} stroke={NB_COLORS[i]} dot={false} strokeWidth={2} connectNulls={false}/>
+                        ))}
+                        {netSimData&&NB_VALS.map((nb,i)=>(
+                          <Scatter key={`rs_${nb}`} dataKey={`rec_sim_${nb}`} name={`sim N_B=${nb}`} fill={NB_COLORS[i]}
+                            shape={p=>{const{cx,cy}=p;if(!cx||!cy)return null;return<rect x={cx-4} y={cy-4} width={8} height={8} fill={NB_COLORS[i]} opacity={0.85}/>}}/>
                         ))}
                         <Legend wrapperStyle={{fontSize:11,fontFamily:"monospace"}}/>
-                      </LineChart>
+                      </ComposedChart>
                     </ResponsiveContainer>
                   </div>
                 </div>
@@ -1037,12 +1275,18 @@
                     ⚠ p_inv={p_inv} ≤ 0.5 — Code 4 lower bound requires p &gt; 0.5.
                   </div>
                 )}
-                {/* log10 scale so all three curves stay visible — Python uses scatter; we add log scale for readability */}
+                <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10,flexWrap:"wrap"}}>
+                  <Btn color={C.green} active={!!wastedSimData} onClick={runWastedSim}>
+                    {wastedSimRunning?"Running…":wastedSimData?"Re-run Simulation":"▶ Run Simulation"}
+                  </Btn>
+                  {wastedSimData&&<Btn color={C.red} active={false} onClick={()=>setWastedSimData(null)}>✕ Clear</Btn>}
+                  {wastedSimData&&<span style={{fontSize:11,color:C.green,fontFamily:"monospace"}}>✓ Squares = simulated wasted slots — should sit at or below Code2/3 bounds, at or above Code4</span>}
+                </div>
                 <div style={{fontSize:10,color:C.muted,fontFamily:"monospace",marginBottom:6,opacity:0.8}}>
-                  Log₁₀ scale — all three curves are visible. Python's original scatter plots use linear scale per-snippet; log scale added here for comparison.
+                  Log₁₀ scale. Simulation uses Bernoulli(p) majority vote × T·f for each code.
                 </div>
                 <ResponsiveContainer width="100%" height={420}>
-                  <LineChart data={wastedData} margin={{left:34,right:20,top:10,bottom:22}}>
+                  <ComposedChart data={wastedMerged} margin={{left:34,right:20,top:10,bottom:22}}>
                     <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
                     <XAxis dataKey="n" stroke={C.muted}
                       tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
@@ -1054,15 +1298,16 @@
                     <Legend wrapperStyle={{fontSize:11,fontFamily:"monospace"}}/>
                     <ReferenceLine y={Math.log10(T_epoch*f)} stroke={C.yellow} strokeDasharray="5 3"
                       label={{value:`Tf=${Math.round(T_epoch*f).toLocaleString()}`,position:"insideRight",fill:C.yellow,fontSize:10}}/>
-                    <Line type="monotone" dataKey="log10_wasted" name="Code 2 — Basic upper bound"
-                      stroke={C.red} dot={{r:2,fill:C.red}} strokeWidth={2} connectNulls={false}/>
+                    <Line type="monotone" dataKey="log10_wasted" name="Code 2 — Basic upper"
+                      stroke={C.red} dot={false} strokeWidth={2} connectNulls={false}/>
                     <Line type="monotone" dataKey="log10_tight" name={`Code 3 — Tight upper (p=${p_tight})`}
-                      stroke={C.blue} dot={{r:2,fill:C.blue}} strokeWidth={2}
-                      strokeDasharray="5 2" connectNulls={false}/>
+                      stroke={C.blue} dot={false} strokeWidth={2} strokeDasharray="5 2" connectNulls={false}/>
                     <Line type="monotone" dataKey="log10_lower" name={`Code 4 — Lower bound (p=${p_inv})`}
-                      stroke={C.green} dot={{r:2,fill:C.green}} strokeWidth={2}
-                      strokeDasharray="3 2" connectNulls={false}/>
-                  </LineChart>
+                      stroke={C.green} dot={false} strokeWidth={2} strokeDasharray="3 2" connectNulls={false}/>
+                    {wastedSimData&&<Scatter dataKey="log10_wasted_sim" name="Code 2 sim" fill={C.red}   shape={p=>{const{cx,cy}=p;if(!cx||!cy)return null;return<rect x={cx-4} y={cy-4} width={8} height={8} fill={C.red}   opacity={0.85}/>}}/>}
+                    {wastedSimData&&<Scatter dataKey="log10_tight_sim"  name="Code 3 sim" fill={C.blue}  shape={p=>{const{cx,cy}=p;if(!cx||!cy)return null;return<rect x={cx-4} y={cy-4} width={8} height={8} fill={C.blue}  opacity={0.85}/>}}/>}
+                    {wastedSimData&&<Scatter dataKey="log10_lower_sim"  name="Code 4 sim" fill={C.green} shape={p=>{const{cx,cy}=p;if(!cx||!cy)return null;return<rect x={cx-4} y={cy-4} width={8} height={8} fill={C.green} opacity={0.85}/>}}/>}
+                  </ComposedChart>
                 </ResponsiveContainer>
                 <div style={{marginTop:10,padding:"8px 12px",background:C.bg,borderRadius:7,
                   border:`1px solid ${C.border}`,fontFamily:"monospace",fontSize:10,color:C.muted}}>
@@ -1084,6 +1329,13 @@
                     ⚠ {p_tight>=0.5?`p_tight=${p_tight} must be < 0.5 for Code 3. `:""}{p_inv<=0.5?`p_inv=${p_inv} must be > 0.5 for Code 4.`:""}
                   </div>
                 )}
+                <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12,flexWrap:"wrap"}}>
+                  <Btn color={C.green} active={!!chernSimData} onClick={runChernSim}>
+                    {chernSimRunning?"Running…":chernSimData?"Re-run Simulation":"▶ Run Simulation"}
+                  </Btn>
+                  {chernSimData&&<Btn color={C.red} active={false} onClick={()=>setChernSimData(null)}>✕ Clear</Btn>}
+                  {chernSimData&&<span style={{fontSize:11,color:C.green,fontFamily:"monospace"}}>✓ Teal/orange squares = exact simulated P(maj. wrong) — below Code3 bound (left), above Code4 bound (right)</span>}
+                </div>
                 {/* Two panels — each matches one Python plt.scatter() call */}
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
 
@@ -1096,7 +1348,7 @@
                       P(maj. accepts) ≤ (4p(1−p))^(n/2) &nbsp;·&nbsp; log₁₀ scale &nbsp;·&nbsp; grey zone
                     </div>
                     <ResponsiveContainer width="100%" height={340}>
-                      <LineChart data={chernoffData} margin={{left:22,right:10,top:8,bottom:28}}>
+                      <ComposedChart data={chernMerged} margin={{left:22,right:10,top:8,bottom:28}}>
                         <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
                         <XAxis dataKey="n" stroke={C.muted}
                           tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
@@ -1105,10 +1357,11 @@
                           tickFormatter={v=>`10^${v.toFixed(0)}`}
                           label={{value:"log₁₀(upper bound)",angle:-90,position:"insideLeft",fill:C.muted,fontSize:10}}/>
                         <Tooltip content={<CustomTT labelFmt={v=>`n=${v}`} valFmt={v=>`10^(${v?.toFixed(2)})`}/>}/>
-                        <Line type="monotone" dataKey="log10_tight"
-                          name={`Code 3 (p=${p_tight})`}
-                          stroke={C.blue} dot={{r:3,fill:C.blue}} strokeWidth={2} connectNulls={false}/>
-                      </LineChart>
+                        <Line type="monotone" dataKey="log10_tight" name={`Code 3 bound (p=${p_tight})`}
+                          stroke={C.blue} dot={false} strokeWidth={2} connectNulls={false}/>
+                        {chernSimData&&<Scatter dataKey="sim_tight" name="Exact sim" fill={C.teal}
+                          shape={p=>{const{cx,cy}=p;if(!cx||!cy)return null;return<rect x={cx-4} y={cy-4} width={8} height={8} fill={C.teal} opacity={0.9}/>}}/>}
+                      </ComposedChart>
                     </ResponsiveContainer>
                   </div>
 
@@ -1121,7 +1374,7 @@
                       P(maj. accepts) ≥ 1−exp(−n·KL(q‖p)) &nbsp;·&nbsp; linear scale &nbsp;·&nbsp; below red line
                     </div>
                     <ResponsiveContainer width="100%" height={340}>
-                      <LineChart data={chernoffData} margin={{left:20,right:10,top:8,bottom:28}}>
+                      <ComposedChart data={chernMerged} margin={{left:20,right:10,top:8,bottom:28}}>
                         <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
                         <XAxis dataKey="n" stroke={C.muted}
                           tick={{fontSize:11,fill:C.muted,fontFamily:"monospace"}}
@@ -1132,10 +1385,11 @@
                         <Tooltip content={<CustomTT labelFmt={v=>`n=${v}`} valFmt={v=>v?.toFixed(5)}/>}/>
                         <ReferenceLine y={0.5} stroke={C.yellow} strokeDasharray="5 3"
                           label={{value:"0.5",position:"insideRight",fill:C.yellow,fontSize:10}}/>
-                        <Line type="monotone" dataKey="lower_bound"
-                          name={`Code 4 (p=${p_inv})`}
-                          stroke={C.red} dot={{r:3,fill:C.red}} strokeWidth={2} connectNulls={false}/>
-                      </LineChart>
+                        <Line type="monotone" dataKey="lower_bound" name={`Code 4 bound (p=${p_inv})`}
+                          stroke={C.red} dot={false} strokeWidth={2} connectNulls={false}/>
+                        {chernSimData&&<Scatter dataKey="sim_lower" name="Exact sim" fill={C.orange}
+                          shape={p=>{const{cx,cy}=p;if(!cx||!cy)return null;return<rect x={cx-4} y={cy-4} width={8} height={8} fill={C.orange} opacity={0.9}/>}}/>}
+                      </ComposedChart>
                     </ResponsiveContainer>
                   </div>
                 </div>
@@ -1244,7 +1498,7 @@
                   &nbsp;·&nbsp; z&#8320;&#8329;&#8329;=2.3263, z&#8320;&#8329;&#8329;&#8329;=3.0902
                 </div>
 
-                {/* q confidence selector */}
+                {/* Controls row: q selector + simulation */}
                 <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:14,flexWrap:"wrap"}}>
                   <span style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>Confidence q:</span>
                   {[0.90,0.95,0.99,0.999].map(q=>(
@@ -1257,9 +1511,28 @@
                   ))}
                   <span style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>
                     z_q = {zQuantile(q_conf).toFixed(4)}
-                    &nbsp;·&nbsp; ε={epsilon}
                   </span>
+                  <div style={{height:18,width:1,background:C.border}}/>
+                  <label style={{fontSize:11,color:C.muted,fontFamily:"monospace"}}>Trials:</label>
+                  <input type="number" value={bSimTrials} min={20} max={2000} step={20}
+                    onChange={e=>setBSimTrials(Math.max(20,parseInt(e.target.value)||100))}
+                    style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:5,
+                      color:C.text,fontFamily:"monospace",fontSize:12,padding:"3px 7px",width:72,outline:"none"}}/>
+                  <Btn color={C.green} active={!!builderSimData} onClick={runBuilderSim}>
+                    {bSimRunning ? "Running…" : builderSimData ? "Re-run Simulation" : "▶ Run Simulation"}
+                  </Btn>
+                  {builderSimData && (
+                    <Btn color={C.red} active={false} onClick={()=>setBuilderSimData(null)}>✕ Clear</Btn>
+                  )}
                 </div>
+                {builderSimData && (
+                  <div style={{marginBottom:10,padding:"5px 12px",borderRadius:5,
+                    background:"rgba(63,185,80,0.08)",border:`1px solid ${C.green}`,
+                    fontSize:11,fontFamily:"monospace",color:C.green}}>
+                    ✓ Simulation complete ({bSimTrials} trials/point) — scatter points overlay theory lines.
+                    &nbsp;<span style={{color:C.yellow}}>Unrecoverable panel: simulation shown only for ε=10⁻¹ (larger ε too slow in browser).</span>
+                  </div>
+                )}
 
                 {/* Two panels side by side: Unrecoverable | Recoverable */}
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
@@ -1282,7 +1555,7 @@
                       ))}
                     </div>
                     <ResponsiveContainer width="100%" height={340}>
-                      <LineChart data={builderData} margin={{left:22,right:10,top:8,bottom:28}}>
+                      <ComposedChart data={builderMerged} margin={{left:22,right:10,top:8,bottom:28}}>
                         <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
                         <XAxis dataKey="NB" stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
                           label={{value:"N_B (blobs per block)",position:"insideBottom",offset:-14,fill:C.muted,fontSize:10}}/>
@@ -1291,12 +1564,22 @@
                           label={{value:"log₁₀(τ_NB,q)",angle:-90,position:"insideLeft",fill:C.muted,fontSize:10}}/>
                         <Tooltip content={<CustomTT labelFmt={v=>`N_B=${v}`} valFmt={v=>`10^(${v?.toFixed(2)})`}/>}/>
                         {EPS_VALS.map((_,ki)=>(
-                          <Line key={ki} type="monotone" dataKey={`u_log10_${ki}`}
+                          <Line key={`ul_${ki}`} type="monotone" dataKey={`u_log10_${ki}`}
                             name={`ε=${EPS_LBLS[ki]}`} stroke={EPS_COLS[ki]}
-                            dot={{r:3,fill:EPS_COLS[ki]}} strokeWidth={2} connectNulls={false}/>
+                            dot={false} strokeWidth={2} connectNulls={false}/>
                         ))}
+                        {/* Simulation scatter — only ε=10⁻¹ (ki=0) is feasible */}
+                        {builderSimData && (
+                          <Scatter dataKey="u_sim_log10_0" name={`sim ε=${EPS_LBLS[0]}`}
+                            fill={EPS_COLS[0]}
+                            shape={(props)=>{
+                              const {cx,cy}=props;
+                              if(cx==null||cy==null) return null;
+                              return <rect x={cx-4} y={cy-4} width={8} height={8} fill={EPS_COLS[0]} opacity={0.9}/>;
+                            }}/>
+                        )}
                         <Legend wrapperStyle={{fontSize:10,fontFamily:"monospace"}}/>
-                      </LineChart>
+                      </ComposedChart>
                     </ResponsiveContainer>
                     <div style={{marginTop:6,padding:"5px 10px",background:C.bg,borderRadius:5,
                       border:`1px solid ${C.border}`,fontSize:10,fontFamily:"monospace",color:C.muted}}>
@@ -1327,7 +1610,7 @@
                       </div>
                     </div>
                     <ResponsiveContainer width="100%" height={340}>
-                      <LineChart data={builderData} margin={{left:30,right:10,top:8,bottom:28}}>
+                      <ComposedChart data={builderMerged} margin={{left:30,right:10,top:8,bottom:28}}>
                         <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
                         <XAxis dataKey="NB" stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
                           label={{value:"N_B (blobs per block)",position:"insideBottom",offset:-14,fill:C.muted,fontSize:10}}/>
@@ -1335,17 +1618,26 @@
                           tickFormatter={v=>v>=1000?`${(v/1000).toFixed(1)}k`:v.toFixed(0)}
                           label={{value:"τ_{N_B,q} (blobs to inspect)",angle:-90,position:"insideLeft",fill:C.muted,fontSize:9}}/>
                         <Tooltip content={<CustomTT labelFmt={v=>`N_B=${v}`} valFmt={v=>v?.toFixed(0)}/>}/>
-                        {/* τ = NB reference (ideal lower bound) */}
                         <Line type="monotone" dataKey="NB"
                           name="τ = N_B (ideal)" stroke={C.muted} dot={false} strokeWidth={1.5}
                           strokeDasharray="4 2" connectNulls={false}/>
                         {EPS_VALS.map((_,ki)=>(
-                          <Line key={ki} type="monotone" dataKey={`r_approx_${ki}`}
+                          <Line key={`rl_${ki}`} type="monotone" dataKey={`r_approx_${ki}`}
                             name={`p=1-${EPS_LBLS[ki]}`} stroke={EPS_COLS[ki]}
-                            dot={{r:3,fill:EPS_COLS[ki]}} strokeWidth={2} connectNulls={false}/>
+                            dot={false} strokeWidth={2} connectNulls={false}/>
+                        ))}
+                        {/* Simulation scatter — all ε values feasible since p≈1 */}
+                        {builderSimData && EPS_VALS.map((_,ki)=>(
+                          <Scatter key={`rs_${ki}`} dataKey={`r_sim_${ki}`}
+                            name={`sim p=1-${EPS_LBLS[ki]}`} fill={EPS_COLS[ki]}
+                            shape={(props)=>{
+                              const {cx,cy}=props;
+                              if(cx==null||cy==null) return null;
+                              return <rect x={cx-4} y={cy-4} width={8} height={8} fill={EPS_COLS[ki]} opacity={0.85}/>;
+                            }}/>
                         ))}
                         <Legend wrapperStyle={{fontSize:10,fontFamily:"monospace"}}/>
-                      </LineChart>
+                      </ComposedChart>
                     </ResponsiveContainer>
                     <div style={{marginTop:6,padding:"5px 10px",background:C.bg,borderRadius:5,
                       border:`1px solid ${C.border}`,fontSize:10,fontFamily:"monospace",color:C.muted}}>
@@ -1373,7 +1665,7 @@
                     ))}
                   </div>
                   <ResponsiveContainer width="100%" height={320}>
-                    <LineChart data={builderData} margin={{left:22,right:20,top:8,bottom:28}}>
+                    <ComposedChart data={builderMerged} margin={{left:22,right:20,top:8,bottom:28}}>
                       <CartesianGrid strokeDasharray="3 3" stroke={C.border}/>
                       <XAxis dataKey="NB" stroke={C.muted} tick={{fontSize:10,fill:C.muted,fontFamily:"monospace"}}
                         label={{value:"N_B (blobs per block)",position:"insideBottom",offset:-14,fill:C.muted,fontSize:10}}/>
@@ -1382,12 +1674,23 @@
                         label={{value:"log₁₀(τ_{N_B,q})",angle:-90,position:"insideLeft",fill:C.muted,fontSize:10}}/>
                       <Tooltip content={<CustomTT labelFmt={v=>`N_B=${v}`} valFmt={v=>`10^(${v?.toFixed(2)})`}/>}/>
                       <Legend wrapperStyle={{fontSize:11,fontFamily:"monospace"}}/>
+                      {/* Theory lines */}
                       {PGREY_VALS.map((_,pi)=>(
-                        <Line key={pi} type="monotone" dataKey={`g_log10_${pi}`}
+                        <Line key={`gl_${pi}`} type="monotone" dataKey={`g_log10_${pi}`}
                           name={`p=${PGREY_VALS[pi]}`} stroke={PGREY_COLS[pi]}
-                          dot={{r:3,fill:PGREY_COLS[pi]}} strokeWidth={2} connectNulls={false}/>
+                          dot={false} strokeWidth={2} connectNulls={false}/>
                       ))}
-                    </LineChart>
+                      {/* Simulation scatter — all p values feasible (p ≥ 0.2) */}
+                      {builderSimData && PGREY_VALS.map((_,pi)=>(
+                        <Scatter key={`gs_${pi}`} dataKey={`g_sim_log10_${pi}`}
+                          name={`sim p=${PGREY_VALS[pi]}`} fill={PGREY_COLS[pi]}
+                          shape={(props)=>{
+                            const {cx,cy}=props;
+                            if(cx==null||cy==null) return null;
+                            return <rect x={cx-4} y={cy-4} width={8} height={8} fill={PGREY_COLS[pi]} opacity={0.9}/>;
+                          }}/>
+                      ))}
+                    </ComposedChart>
                   </ResponsiveContainer>
                 </div>
 
