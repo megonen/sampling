@@ -1,0 +1,950 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Logos DA — Sampling Animation</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Inter:wght@300;400;500;600&display=swap');
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#060b10;--panel:#0c1320;--border:#192840;
+  --blue:#3b9eff;--red:#ff4d6a;--green:#00e5a0;--yellow:#ffd166;
+  --purple:#c77dff;--orange:#ff9a3c;--teal:#00d4d4;
+  --text:#dde8f5;--muted:#405a78;
+  --mono:'JetBrains Mono',monospace;--sans:'Inter',sans-serif;
+}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;overflow:hidden}
+.app{display:grid;grid-template-columns:268px 1fr;height:100vh}
+.ctrl{background:var(--panel);border-right:1px solid var(--border);display:flex;flex-direction:column;padding:13px 12px;overflow-y:auto;gap:10px}
+.ct{font-family:var(--mono);font-size:8px;letter-spacing:.22em;color:var(--muted);text-transform:uppercase;padding-bottom:6px;border-bottom:1px solid var(--border)}
+.pg{display:flex;flex-direction:column;gap:6px}
+.pr{display:flex;flex-direction:column;gap:3px}
+.pl{display:flex;justify-content:space-between;align-items:center;font-family:var(--mono);font-size:10px;color:var(--muted)}
+.pl span{color:var(--text);font-weight:600}
+input[type=range]{width:100%;height:3px;background:var(--border);border-radius:2px;-webkit-appearance:none;outline:none;cursor:pointer}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:12px;border-radius:50%;cursor:pointer}
+input[type=number]{width:100%;padding:3px 6px;background:#07101a;border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--mono);font-size:10.5px;outline:none}
+input[type=number]:focus{border-color:var(--blue)}
+.mb{padding:7px 8px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--muted);font-family:var(--mono);font-size:9.5px;cursor:pointer;text-align:left;transition:all .15s;line-height:1.4;width:100%}
+.mb:hover{border-color:var(--blue);color:var(--text)}
+.mb.ah{border-color:var(--green);color:var(--green);background:rgba(0,229,160,.05)}
+.mb.aa{border-color:var(--yellow);color:var(--yellow);background:rgba(255,209,102,.05)}
+.mb.ab{border-color:var(--red);color:var(--red);background:rgba(255,77,106,.05)}
+.mt{font-weight:700;font-size:10px;margin-bottom:1px}
+.md{font-size:8px;opacity:.7}
+.btn{padding:9px;border-radius:7px;border:1px solid var(--blue);background:rgba(59,158,255,.09);color:var(--blue);font-family:var(--mono);font-size:11px;font-weight:700;cursor:pointer;letter-spacing:.06em;transition:all .18s;width:100%}
+.btn:hover{background:rgba(59,158,255,.18)}
+.btn:disabled{opacity:.3;cursor:not-allowed}
+.btn.run{border-color:var(--orange);color:var(--orange);background:rgba(255,154,60,.09)}
+.btn.rst{border-color:var(--muted);color:var(--muted);background:transparent;margin-top:-2px}
+.btn.rst:hover{color:var(--text);border-color:var(--text)}
+.leg{display:flex;flex-direction:column;gap:3px}
+.li{display:flex;align-items:center;gap:6px;font-size:9px;color:var(--muted);font-family:var(--mono)}
+.ld{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.info-box{background:#07111e;border:1px solid var(--border);border-radius:5px;padding:7px 8px;font-family:var(--mono);font-size:9px;color:var(--muted);display:flex;flex-direction:column;gap:3px}
+.info-row{display:flex;justify-content:space-between}
+.info-val{color:var(--text)}
+/* viz */
+.viz{display:flex;flex-direction:column;overflow:hidden}
+.vh{padding:9px 16px 8px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;flex-shrink:0}
+.vt{font-family:var(--mono);font-size:9px;letter-spacing:.14em;color:var(--muted);text-transform:uppercase}
+.badge{font-family:var(--mono);font-size:9px;padding:2px 9px;border-radius:4px;border:1px solid currentColor;transition:all .3s}
+.svg-c{flex:1;width:100%;height:100%;display:block}
+.sb{padding:8px 16px;border-top:1px solid var(--border);background:var(--panel);display:flex;align-items:center;gap:12px;min-height:42px;flex-shrink:0}
+.sd{color:var(--text);flex:1;font-family:var(--mono);font-size:9.5px;line-height:1.4}
+.ss{color:var(--muted);white-space:nowrap;font-family:var(--mono);font-size:9px}
+</style>
+</head>
+<body>
+<div class="app">
+  <!-- CONTROLS -->
+  <div class="ctrl">
+    <div class="ct">Logos DA — Parameters</div>
+    <div class="pg" id="pg"></div>
+
+    <!-- Derived values display -->
+    <div class="info-box" id="info-box">
+      <div class="info-row"><span>K = N/e</span><span class="info-val" id="iv-K">?</span></div>
+      <div class="info-row"><span>P_fail^eff = p_d^t</span><span class="info-val" id="iv-pf">?</span></div>
+      <div class="info-row"><span>Attack B threshold</span><span class="info-val" id="iv-thB">?</span></div>
+      <div class="info-row"><span>Blobs / block</span><span class="info-val" id="iv-nb">1024</span></div>
+    </div>
+
+    <div class="ct">Speed</div>
+    <div style="display:flex;gap:8px;align-items:center">
+      <input type="range" id="spd" min=".5" max="4" step=".5" value="1" style="flex:1">
+      <span id="spd-lbl" style="font-family:var(--mono);font-size:10px;color:var(--text);width:22px">1×</span>
+    </div>
+
+    <div class="ct">Attack Mode</div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      <button class="mb ah" data-m="honest"><div class="mt">✦ Honest Network</div><div class="md">All nodes disperse &amp; respond normally</div></button>
+      <button class="mb" data-m="attackA"><div class="mt">⚡ Attack A — Liveness</div><div class="md">Adversary silences targeted validator (Type II)</div></button>
+      <button class="mb" data-m="attackB"><div class="mt">☠ Attack B — Safety</div><div class="md">Adversary disperses only to K subnets (Type I)</div></button>
+    </div>
+
+    <button class="btn" id="start-btn">▶  START ANIMATION</button>
+    <button class="btn rst" id="reset-btn">↺  RESET</button>
+
+    <div class="ct">Legend</div>
+    <div class="leg">
+      <div class="li"><div class="ld" style="background:var(--blue)"></div>Honest subnet / node</div>
+      <div class="li"><div class="ld" style="background:#c84060"></div>Adversarial subnet / node</div>
+      <div class="li"><div class="ld" style="background:var(--green)"></div>Valid response ✓</div>
+      <div class="li"><div class="ld" style="background:var(--yellow);opacity:.8"></div>Sampled subnet</div>
+      <div class="li"><div class="ld" style="background:#111"></div>No data (Attack B)</div>
+    </div>
+  </div>
+
+  <!-- VIZ -->
+  <div class="viz">
+    <div class="vh">
+      <span class="vt">DA Sampling — Multi-Validator · Scalable</span>
+      <span class="badge" id="badge" style="color:var(--muted);border-color:var(--muted)">IDLE</span>
+      <span id="counter" style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:auto"></span>
+    </div>
+    <svg id="svg" class="svg-c"></svg>
+    <div class="sb">
+      <span class="sd" id="desc">Configure parameters and press Start.</span>
+      <span class="ss" id="steplbl"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+const NS_SVG='http://www.w3.org/2000/svg';
+const svg=document.getElementById('svg');
+
+// ── PARAMETERS ──────────────────────────────────────────────────
+const PARAMS=[
+  {k:'NB', lbl:'N_B (blobs/block)', type:'number',min:1, max:4096, step:1,  val:1024, c:'#c77dff'},
+  {k:'M',  lbl:'m  (validators)',   type:'number',min:1, max:256,  step:1,  val:3,    c:'#00e5a0'},
+  {k:'N',  lbl:'N  (subnetworks)',  type:'number',min:4, max:2048,  step:1,  val:32,   c:'#3b9eff'},
+  {k:'e',  lbl:'e  (RS expansion)', type:'range', min:2, max:4,    step:1,  val:2,    c:'#00d4d4'},
+  {k:'R',  lbl:'R  (nodes/subnet)', type:'range', min:1, max:5,    step:1,  val:3,    c:'#3b9eff'},
+  {k:'S',  lbl:'S  (samples)',      type:'range', min:2, max:20,   step:1,  val:8,    c:'#3b9eff'},
+  {k:'tau',lbl:'τ  (threshold)',    type:'range', min:1, max:20,   step:1,  val:6,    c:'#00d4d4'},
+  {k:'t',  lbl:'t  (queries/sn)',   type:'range', min:1, max:5,    step:1,  val:2,    c:'#c77dff'},
+  {k:'pd', lbl:'p_d (adversarial%)',type:'range', min:0, max:70,   step:5,  val:30,   c:'#ff4d6a'},
+];
+const P={};
+
+PARAMS.forEach(p=>P[p.k]=p.val);
+
+const pg=document.getElementById('pg');
+PARAMS.forEach(p=>{
+  const d=document.createElement('div');d.className='pr';
+  const sfx=p.k==='pd'?'%':'';
+  if(p.type==='range'){
+    d.innerHTML=`<div class="pl">${p.lbl}<span id="lv-${p.k}">${p.val}${sfx}</span></div>
+      <input type="range" id="sl-${p.k}" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.val}" style="accent-color:${p.c}">`;
+  } else {
+    d.innerHTML=`<div class="pl">${p.lbl}<span id="lv-${p.k}">${p.val}</span></div>
+      <input type="number" id="sl-${p.k}" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.val}">`;
+  }
+  pg.appendChild(d);
+  const inp=d.querySelector('input');
+  const upd=()=>{
+    let v=Math.max(p.min,Math.min(p.max,+inp.value||p.val));
+    if(inp.type==='number'&&isNaN(+inp.value))return;
+    P[p.k]=v; inp.value=v;
+    document.getElementById(`lv-${p.k}`).textContent=v+sfx;
+    // clamp S to N, tau to S
+    if(p.k==='N'||p.k==='S'){
+      P.S=Math.min(P.S,P.N);
+      document.getElementById('sl-S').max=Math.min(P.N,20);
+      document.getElementById('sl-S').value=P.S;
+      document.getElementById('lv-S').textContent=P.S;
+    }
+    if(p.k==='S'||p.k==='tau'){
+      P.tau=Math.min(P.tau,P.S);
+      document.getElementById('sl-tau').max=P.S;
+      document.getElementById('sl-tau').value=P.tau;
+      document.getElementById('lv-tau').textContent=P.tau;
+    }
+    if(p.k==='R'||p.k==='t'){
+      P.t=Math.min(P.t,P.R);
+      document.getElementById('sl-t').max=P.R;
+      document.getElementById('sl-t').value=P.t;
+      document.getElementById('lv-t').textContent=P.t;
+    }
+    updateInfo();
+    if(!running){buildNet();draw();}
+  };
+  inp.oninput=upd;inp.onchange=upd;
+});
+
+function updateInfo(){
+  const K=Math.floor(P.N/P.e);
+  const pf=(P.pd/100)**P.t;
+  const thB=((1-1/P.e)**(1/P.R));
+  document.getElementById('iv-K').textContent=K;
+  document.getElementById('iv-pf').textContent=pf.toExponential(2);
+  document.getElementById('iv-thB').textContent=(thB*100).toFixed(1)+'%';
+  document.getElementById('iv-nb').textContent=P.NB;
+}
+updateInfo();
+
+let speed=1;
+document.getElementById('spd').oninput=e=>{speed=+e.target.value;document.getElementById('spd-lbl').textContent=speed+'×';};
+const D=ms=>ms/speed;
+
+// ── LAYOUT ──────────────────────────────────────────────────────
+let W,H;
+function resize(){const r=svg.getBoundingClientRect();W=r.width||800;H=r.height||500;svg.setAttribute('viewBox',`0 0 ${W} ${H}`);}
+window.addEventListener('resize',()=>{resize();if(!running)draw();});
+resize();
+
+function getGridDims(N){
+  // Find cols/rows for a roughly 2:1 aspect ratio grid
+  if(N<=8)  return{cols:4,rows:Math.ceil(N/4)};
+  if(N<=16) return{cols:4,rows:4};
+  if(N<=32) return{cols:8,rows:4};
+  if(N<=64) return{cols:8,rows:8};
+  if(N<=128) return{cols:16,rows:8};
+  if(N<=256) return{cols:16,rows:16};
+  if(N<=512) return{cols:32,rows:16};
+  if(N<=1024) return{cols:32,rows:32};
+  return{cols:64,rows:32}; // 2048
+}
+
+function getLayout(){
+  const M=P.M, N=P.N;
+  const {cols,rows}=getGridDims(N);
+  // Encoder: left of grid
+  const encX=W*0.055, encY=H*0.12;
+  // Grid area
+  const gridL=W*0.1, gridR=W*0.74;
+  const gridT=H*0.1,  gridB=H*0.92;
+  const gridW=gridR-gridL, gridH=gridB-gridT;
+  // Cell size with 1px gap
+  const cellW=(gridW-(cols-1))/cols;
+  const cellH=(gridH-(rows-1))/rows;
+  const cell=Math.max(1.5,Math.min(cellW,cellH));
+  const actualW=cols*cell+(cols-1);
+  const actualH=rows*cell+(rows-1);
+  const ox=gridL+(gridW-actualW)/2;
+  const oy=gridT+(gridH-actualH)/2;
+  const subPos=Array.from({length:N},(_,i)=>{
+    const c=i%cols, r=Math.floor(i/cols);
+    return {x:ox+c*(cell+1)+cell/2, y:oy+r*(cell+1)+cell/2, cell};
+  });
+  const showNodes=cell>=20; // only show nodes inside if cell big enough
+  // Validators: right side
+  // Validator grid (similar to subnet grid, scales to 256)
+  function getValGridDims(M){
+    if(M<=8)  return{vc:1,vr:M};
+    if(M<=16) return{vc:2,vr:8};
+    if(M<=32) return{vc:2,vr:16};
+    if(M<=64) return{vc:4,vr:16};
+    if(M<=128)return{vc:8,vr:16};
+    return{vc:16,vr:16}; // 256
+  }
+  const {vc,vr}=getValGridDims(M);
+  const valAreaX=W*0.76, valAreaW=W*0.22;
+  const valAreaY=H*0.08, valAreaH=H*0.85;
+  const showLargeVal=M<=8;
+  const vCell=showLargeVal
+    ? Math.min(valAreaW/vc - 4, valAreaH/vr - 4, 60)
+    : Math.min((valAreaW-(vc-1))/(vc), (valAreaH-(vr-1))/(vr));
+  const actualVW=vc*vCell+(vc-1), actualVH=vr*vCell+(vr-1);
+  const vox=valAreaX+(valAreaW-actualVW)/2;
+  const voy=valAreaY+(valAreaH-actualVH)/2;
+  const vals=Array.from({length:M},(_,i)=>{
+    const c=Math.floor(i/vr), r=i%vr;
+    return {x:vox+c*(vCell+1)+vCell/2, y:voy+r*(vCell+1)+vCell/2, vCell, showLargeVal};
+  });
+  return{encX,encY,subPos,cell,showNodes,vals,vCell,showLargeVal,cols,rows,ox,oy,actualW,actualH};
+}
+
+// ── SVG HELPERS ─────────────────────────────────────────────────
+function el(tag,a={},par=null){
+  const e=document.createElementNS(NS_SVG,tag);
+  Object.entries(a).forEach(([k,v])=>e.setAttribute(k,v));
+  if(par)par.appendChild(e);
+  return e;
+}
+function txt(s,a={},par=null){const e=el('text',a,par);e.textContent=s;return e;}
+
+let gBg,gLines,gGrid,gNodes,gOver;
+function setupLayers(){
+  svg.innerHTML='';
+  gBg=el('g',{},svg);gLines=el('g',{},svg);
+  gGrid=el('g',{},svg);gNodes=el('g',{},svg);gOver=el('g',{},svg);
+  // background grid
+  for(let x=0;x<W;x+=50)el('line',{x1:x,y1:0,x2:x,y2:H,stroke:'#090f1a',strokeWidth:.35},gBg);
+  for(let y=0;y<H;y+=50)el('line',{x1:0,y1:y,x2:W,y2:y,stroke:'#090f1a',strokeWidth:.35},gBg);
+}
+
+// ── NETWORK ──────────────────────────────────────────────────────
+let network=[];
+let mode='honest';
+let running=false;
+let timers=[];
+
+function buildNet(){
+  const pd=P.pd/100;
+  network=Array.from({length:P.N},(_,i)=>({
+    id:i,
+    nodes:Array.from({length:P.R},(_,j)=>({id:j,adv:Math.random()<pd})),
+    hasData:false,
+  }));
+}
+
+// ── COLORS & STATUS ──────────────────────────────────────────────
+function subnetFill(sn, state){
+  if(!sn.hasData && state.postDisperse && mode==='attackB') return '#0a0508';
+  if(state.success===true) return 'rgba(0,229,160,.12)';
+  if(state.success===false) return 'rgba(255,77,106,.08)';
+  if(state.sampled) return 'rgba(255,209,102,.07)';
+  const hasAdv=sn.nodes.some(n=>n.adv);
+  return hasAdv?'rgba(200,64,96,.06)':'rgba(30,50,80,.4)';
+}
+function subnetStroke(sn, state){
+  if(state.success===true) return['#00e5a0',2];
+  if(state.success===false) return['#ff4d6a',1.5];
+  if(state.sampled) return['#ffd166',1.5];
+  if(!sn.hasData && state.postDisperse && mode==='attackB') return['#2a0f14',0.5];
+  const hasAdv=sn.nodes.some(n=>n.adv);
+  return hasAdv?['#c84060',0.8]:['#1e3858',0.6];
+}
+
+// ── DRAW STATIC ──────────────────────────────────────────────────
+let snElements=[]; // cache SVG rect elements for fast update
+
+function draw(state={}){
+  setupLayers();
+  snElements=[];
+  const L=getLayout();
+  drawEncoder(L,state);
+  drawValidators(L,state);
+  drawSubnetGrid(L,state);
+  drawLabels(L);
+}
+
+function drawEncoder(L,state){
+  const {encX:ex,encY:ey}=L;
+  const r=Math.max(16,Math.min(W,H)*.03);
+  const g=el('g',{transform:`translate(${ex},${ey})`},gNodes);
+  el('circle',{r:r*1.6,fill:'none',stroke:'#152840',strokeWidth:.8,strokeDasharray:'3 3'},g);
+  el('circle',{r,fill:'#061828',stroke:'#3b9eff',strokeWidth:1.8},g);
+  if(state.encoding||state.dispersing)el('circle',{r,fill:'none',stroke:'#3b9eff',strokeWidth:3,opacity:.6},g);
+  txt('ENC',{x:0,y:r*.4,textAnchor:'middle',fill:'#3b9eff',fontSize:Math.max(7,r*.48),fontFamily:'JetBrains Mono',fontWeight:'bold'},g);
+  txt('Encoder',{x:0,y:r+12,textAnchor:'middle',fill:'#405a78',fontSize:Math.max(6,r*.35),fontFamily:'JetBrains Mono'},g);
+  if(state.encoding||state.dispersing){
+    el('rect',{x:-16,y:-r-18,width:32,height:11,rx:2,fill:'rgba(59,158,255,.12)',stroke:'#3b9eff',strokeWidth:.8},g);
+    txt('BLOB',{x:0,y:-r-10,textAnchor:'middle',fill:'#3b9eff',fontSize:7,fontFamily:'JetBrains Mono'},g);
+  }
+  // K and N labels
+  const K=Math.floor(P.N/P.e);
+  txt(`N=${P.N}`,{x:0,y:ey+r+28,textAnchor:'middle',fill:'#2a4a6a',fontSize:8,fontFamily:'JetBrains Mono'},gOver);
+  txt(`K=N/e=${K}`,{x:0,y:ey+r+40,textAnchor:'middle',fill:mode==='attackB'?'#ff4d6a':'#2a4a6a',fontSize:8,fontFamily:'JetBrains Mono'},gOver);
+}
+
+function drawValidators(L,state){
+  const {vals,vCell,showLargeVal}=L;
+  const M=P.M;
+  // Header label for validator grid
+
+  vals.forEach((v,vi)=>{
+    const vs=state.validators&&state.validators[vi];
+    const verdict=vs&&vs.verdict;
+    const vc2=verdict===true?'#00e5a0':verdict===false?'#ff4d6a':'#00e5a0';
+    if(showLargeVal){
+      // Large mode: circles with labels
+      const r=Math.min(vCell/2-3,28);
+      const g=el('g',{transform:`translate(${v.x},${v.y})`},gNodes);
+      el('circle',{r:r*1.5,fill:'none',stroke:verdict!==undefined?vc2+'33':'#091a10',strokeWidth:.7,strokeDasharray:'3 3'},g);
+      el('circle',{r,fill:verdict===true?'rgba(0,229,160,.07)':verdict===false?'rgba(255,77,106,.07)':'#06130e',stroke:vc2,strokeWidth:1.6},g);
+      txt(`V${vi+1}`,{x:0,y:r*.38,textAnchor:'middle',fill:vc2,fontSize:Math.min(Math.max(6,r*.44),10),fontFamily:'JetBrains Mono',fontWeight:'bold'},g);
+      const lbl=M<=3?`Validator ${vi+1}`:`V${vi+1}`;
+      txt(lbl,{x:0,y:r+11,textAnchor:'middle',fill:'#405a78',fontSize:Math.max(5,r*.28),fontFamily:'JetBrains Mono'},g);
+      if(vs){
+        const succ=vs.successes!==undefined?vs.successes:'?';
+        txt(`${succ}/${P.S}`,{x:-r-6,y:-3,textAnchor:'end',fill:'#00e5a0',fontSize:9,fontFamily:'JetBrains Mono',fontWeight:'bold'},g);
+        txt(`τ=${Math.min(P.tau,P.S)}`,{x:-r-6,y:9,textAnchor:'end',fill:'#00d4d4',fontSize:7.5,fontFamily:'JetBrains Mono'},g);
+        if(verdict!==undefined){
+          txt(verdict?'✓':'✗',{x:0,y:-r-9,textAnchor:'middle',fill:vc2,fontSize:12,fontWeight:'bold'},g);
+        }
+      }
+    } else {
+      // Small grid mode: colored squares like subnets
+      const s=Math.max(1.5,vCell*.5);
+      const fill=verdict===true?'rgba(0,229,160,.25)':verdict===false?'rgba(255,77,106,.2)':'rgba(10,30,50,.6)';
+      const stroke=verdict===true?'#00e5a0':verdict===false?'#ff4d6a':'#1e4060';
+      const sw=verdict!==undefined?1.5:0.6;
+      el('rect',{x:v.x-vCell/2,y:v.y-vCell/2,width:vCell,height:vCell,rx:Math.max(.5,vCell*.08),
+        fill,stroke,strokeWidth:sw},gNodes);
+      // show checkmark/cross if verdict and cell big enough
+      if(verdict!==undefined&&vCell>=8){
+        txt(verdict?'✓':'✗',{x:v.x,y:v.y+vCell*.2,textAnchor:'middle',fill:verdict?'#00e5a0':'#ff4d6a',
+          fontSize:vCell*.55,fontFamily:'JetBrains Mono'},gNodes);
+      }
+      // show V label only if cell is large enough to be readable
+      if(vCell>=20){
+        txt(`V${vi+1}`,{x:v.x,y:v.y+vCell*.15,textAnchor:'middle',fill:vc2,fontSize:Math.min(vCell*.28,9),fontFamily:'JetBrains Mono',fontWeight:'bold'},gNodes);
+      }
+    }
+  });
+  // summary badge for small grid
+  if(!showLargeVal&&state.validators){
+    const avail=state.validators.filter(v=>v.verdict===true).length;
+    const done=state.validators.filter(v=>v.verdict!==undefined).length;
+    if(done>0){
+      const bx=vals[0].x+((vals[Math.min(M-1,15)].x-vals[0].x))/2;
+      const by=vals[0].y+vals[Math.min(M-1,15)].vCell*0.5+18;
+      txt(`${avail}/${done} → Available`,{x:bx,y:by,textAnchor:'middle',fill:'#00e5a0',fontSize:9,fontFamily:'JetBrains Mono',fontWeight:'bold'},gNodes);
+    }
+  }
+}
+
+function drawSubnetGrid(L,state={}){
+  const {subPos,cell,showNodes,cols,rows,ox,oy,actualW,actualH}=L;
+  const N=P.N;
+  // grid border
+  el('rect',{x:ox-2,y:oy-2,width:actualW+4,height:actualH+4,rx:4,fill:'none',stroke:'#101a28',strokeWidth:1},gBg);
+
+
+  for(let i=0;i<N;i++){
+    const {x,y}=subPos[i];
+    const sn=network[i];
+    const isSampled=state.sampledAll&&state.sampledAll.includes(i);
+    // Find best result across validators for this subnet
+    let bestRes=undefined;
+    if(state.validators){
+      for(const vs of state.validators){
+        if(vs.results&&vs.results[i]!==undefined){bestRes=vs.results[i];break;}
+      }
+    }
+    const sstate={
+      postDisperse:state.postDisperse,
+      sampled:isSampled,
+      success:bestRes?bestRes.success:undefined,
+      nodeStates:bestRes?bestRes.nodeStates:undefined,
+    };
+    const fill=subnetFill(sn,sstate);
+    const [sc,sw]=subnetStroke(sn,sstate);
+    const r=Math.max(0.5,cell*0.1);
+    const rect=el('rect',{x:x-cell/2,y:y-cell/2,width:cell,height:cell,rx:r,fill,stroke:sc,strokeWidth:sw},gGrid);
+    snElements.push(rect);
+
+    // Show subnet index only if cell is large enough
+    if(cell>=30){
+      txt(`${i}`,{x,y:y-cell*.22,textAnchor:'middle',fill:'#1e3050',fontSize:Math.min(cell*.18,7),fontFamily:'JetBrains Mono'},gGrid);
+    }
+
+    // Show nodes inside only if cell big enough
+    if(showNodes&&cell>=20){
+      drawNodesInSubnet(sn,sstate,x,y,cell);
+    } else if(cell>=6){
+      // Tiny indicator: fill color based on adversarial count
+      const hasAdv=sn.nodes.some(n=>n.adv);
+      if(hasAdv&&mode!=='attackB'){
+        el('rect',{x:x-cell*.18,y:y-cell*.18,width:cell*.36,height:cell*.36,rx:0.5,fill:'#c84060',opacity:.7},gGrid);
+      }
+    }
+    // result indicators
+    if(sstate.success===true&&cell>=8)
+      txt('✓',{x,y:y+cell*.22,textAnchor:'middle',fill:'#00e5a0',fontSize:cell*.55,fontFamily:'JetBrains Mono'},gGrid);
+    if(sstate.success===false&&cell>=8)
+      txt('✗',{x,y:y+cell*.22,textAnchor:'middle',fill:'#ff4d6a',fontSize:cell*.55,fontFamily:'JetBrains Mono'},gGrid);
+  }
+}
+
+function drawNodesInSubnet(sn,state,cx,cy,cell){
+  const R=sn.nodes.length;
+  const nr=Math.min(cell*.16,7);
+  const gap=Math.min(cell*.22,14);
+  const totalW=(R-1)*gap;
+  const ny=cy+cell*.12;
+  sn.nodes.forEach((nd,ni)=>{
+    const nx=cx-totalW/2+ni*gap;
+    const ns=state.nodeStates&&state.nodeStates[ni];
+    let nf=nd.adv?'#2a0e14':'#081a2c';
+    let nstroke=nd.adv?'#c84060':'#2a5070';
+    if(ns==='success'){nf='#051a0e';nstroke='#00e5a0';}
+    if(ns==='silent'){nf='#1e0808';nstroke='#ff4d6a';}
+    if(ns==='queried'){nf='#100820';nstroke='#c77dff';}
+    el('circle',{cx:nx,cy:ny,r:nr,fill:nf,stroke:nstroke,strokeWidth:1.2},gGrid);
+    let sym=nd.adv&&!ns?'·':'';
+    if(ns==='success')sym='✓';
+    if(ns==='silent')sym='✗';
+    if(sym&&nr>4)txt(sym,{x:nx,y:ny+nr*.38,textAnchor:'middle',fill:nstroke,fontSize:nr*1.1,fontFamily:'JetBrains Mono'},gGrid);
+  });
+}
+
+function drawLabels(L){
+  const K=Math.floor(P.N/P.e);
+  const fs=8.5;
+  if(mode==='attackB')
+    txt(`Attack B: disperses to ≤ K=${K} = N/e subnets → data unrecoverable (N_avail < K+1)`,
+      {x:W*.42,y:H*.98,textAnchor:'middle',fill:'rgba(255,77,106,.7)',fontSize:fs,fontFamily:'JetBrains Mono'},gOver);
+  if(mode==='attackA')
+    txt(`Attack A: adversarial nodes silent → false failures on sampled subnets`,
+      {x:W*.42,y:H*.98,textAnchor:'middle',fill:'rgba(255,209,102,.7)',fontSize:fs,fontFamily:'JetBrains Mono'},gOver);
+}
+
+// ── FAST SUBNET UPDATE (no full redraw) ──────────────────────────
+function updateSubnetEl(i,sn,state){
+  const el2=snElements[i];if(!el2)return;
+  const fill=subnetFill(sn,state);
+  const [sc,sw]=subnetStroke(sn,state);
+  el2.setAttribute('fill',fill);
+  el2.setAttribute('stroke',sc);
+  el2.setAttribute('stroke-width',sw);
+}
+
+// ── ANIMATION HELPERS ────────────────────────────────────────────
+function animLine(x1,y1,x2,y2,color,dur){
+  const dx=x2-x1,dy=y2-y1,len=Math.sqrt(dx*dx+dy*dy);
+  const l=el('line',{x1,y1,x2,y2,stroke:color,strokeWidth:1.2,opacity:.65,
+    strokeDasharray:len,strokeDashoffset:len},gLines);
+  l.style.transition=`stroke-dashoffset ${D(dur)}ms ease`;
+  requestAnimationFrame(()=>requestAnimationFrame(()=>l.setAttribute('stroke-dashoffset','0')));
+  return l;
+}
+function packet(x1,y1,x2,y2,color,dur,cb){
+  const c=el('circle',{cx:x1,cy:y1,r:4,fill:color,opacity:1},gOver);
+  const d=D(dur),s=performance.now();
+  function step(now){
+    const t=Math.min((now-s)/d,1);
+    c.setAttribute('cx',x1+(x2-x1)*t);c.setAttribute('cy',y1+(y2-y1)*t);
+    c.setAttribute('opacity',''+(0.9-t*.5));c.setAttribute('r',''+(4-t*1.5));
+    if(t<1)requestAnimationFrame(step);else{c.remove();if(cb)cb();}
+  }
+  requestAnimationFrame(step);
+}
+function pulse(x,y,color,r0,n=3){
+  for(let i=0;i<n;i++) setTimeout(()=>{
+    const c=el('circle',{cx:x,cy:y,r:r0,fill:'none',stroke:color,strokeWidth:2,opacity:.8},gOver);
+    c.style.transition=`all ${D(600)}ms ease-out`;
+    requestAnimationFrame(()=>requestAnimationFrame(()=>{c.setAttribute('r',''+(r0*2.3));c.setAttribute('opacity','0');}));
+    setTimeout(()=>c.remove(),D(700));
+  },D(i*180));
+}
+function flashSubnet(i,color){
+  const e=snElements[i];if(!e)return;
+  e.setAttribute('stroke',color);e.setAttribute('stroke-width','2');
+  setTimeout(()=>{if(!running)return;},D(300));
+}
+function setBadge(t,c){const b=document.getElementById('badge');b.textContent=t;b.style.color=c;b.style.borderColor=c;}
+function setDesc(s){document.getElementById('desc').textContent=s;}
+function setStep(s){document.getElementById('steplbl').textContent=s;}
+function setCounter(s){document.getElementById('counter').textContent=s;}
+function dly(ms){return new Promise(r=>{const t=setTimeout(r,D(ms));timers.push(t);});}
+
+// ── MAIN ANIMATION ────────────────────────────────────────────────
+async function animate(){
+  const {N,M,S,e:eParam,R,t,pd,NB}=P;
+  const tau=Math.min(P.tau,S);
+  const K=Math.floor(N/eParam); // RS reconstruction threshold
+  const L=getLayout();
+  const {encX:ex,encY:ey,subPos,vals,showNodes,cell}=L;
+  const er=Math.max(16,Math.min(W,H)*.03);
+  const vr=Math.max(14,Math.min(W,H)*.03);
+
+  // which subnets are adversarially controlled (have at least 1 adv node)
+  const advCtrl=network.map(sn=>sn.nodes.some(n=>n.adv));
+
+  // ── Step 1: Encoding ─────────────────────────────────────────
+  setBadge('ENCODING','#3b9eff');
+  setDesc(`Blob arrives at encoder. RS coding (e=${eParam}) expands to N=${N} columns. Reconstruction threshold K = N/e = ${K}.`);
+  setStep('1 / 6');
+  draw({encoding:true});
+  pulse(ex,ey,'#3b9eff',er*1.3,3);
+  await dly(1500);
+
+  // ── Step 2: Dispersal ─────────────────────────────────────────
+  let dataSubnets;
+  if(mode==='attackB'){
+    setBadge('DISPERSING','#ff4d6a');
+    const advIdx=network.map((_,i)=>i).filter(i=>advCtrl[i]);
+    // greedily pick K subnets with most adversarial nodes (highest p_samp)
+    advIdx.sort((a,b)=>{
+      const na=network[a].nodes.filter(n=>n.adv).length;
+      const nb=network[b].nodes.filter(n=>n.adv).length;
+      return nb-na;
+    });
+    dataSubnets=advIdx.slice(0,K);
+    setDesc(`Attack B: Adversary (encoder) disperses to ≤K=${K} own subnets only. N−K=${N-K} honest subnets receive NOTHING → data unrecoverable (N_avail=${dataSubnets.length} < K+1=${K+1}).`);
+  } else {
+    setBadge('DISPERSING','#3b9eff');
+    dataSubnets=network.map((_,i)=>i);
+    setDesc(`All N=${N} subnetworks receive a column shard. Data fully available (N_avail = N = ${N} ≥ K+1 = ${K+1}).`);
+  }
+  setStep('2 / 6');
+  dataSubnets.forEach(i=>network[i].hasData=true);
+  draw({encoding:true});
+
+  // Dispersal animation — batch for large N
+  const batchSize=N<=32?1:N<=128?4:N<=512?8:16;
+  const showPackets=N<=64;
+  const lineDur=N<=32?700:N<=128?400:200;
+  const subDelay=N<=32?200:N<=128?60:N<=512?20:8;
+
+  for(let i=0;i<N;i+=batchSize){
+    const batch=Array.from({length:Math.min(batchSize,N-i)},(_,j)=>i+j);
+    batch.forEach(idx=>{
+      const p=subPos[idx];
+      if(!dataSubnets.includes(idx)){
+        // highlight as dark/no data
+        updateSubnetEl(idx,network[idx],{postDisperse:true});
+        return;
+      }
+      const color=mode==='attackB'?'#ff4d6a':'#3b9eff';
+      if(showPackets){
+        animLine(ex,ey,p.x,p.y-cell/2,color,lineDur);
+        packet(ex,ey,p.x,p.y,color,lineDur+80,null);
+      }
+      updateSubnetEl(idx,network[idx],{postDisperse:true});
+    });
+    await dly(subDelay);
+  }
+  await dly(showPackets?900:500);
+  draw({postDisperse:true});
+  await dly(400);
+
+  // ── Step 3: Sampling ─────────────────────────────────────────
+  setBadge('SAMPLING','#ffd166');
+  setDesc(`Each of M=${M} validators independently samples S=${S} subnetworks at random from N=${N}.`);
+  setStep('3 / 6');
+  gLines.innerHTML='';
+
+  const validatorSamples=vals.map(()=>[...Array(N).keys()].sort(()=>Math.random()-.5).slice(0,S));
+  const allSampled=[...new Set(validatorSamples.flat())];
+
+  draw({postDisperse:true,sampledAll:allSampled});
+
+  // ── Sampling animation: validator → subnet packets ──
+  // For each validator, show animated query packets going TO sampled subnets
+  const showPacketsOut = N<=256 && M<=64;
+  const valDelay = M<=4 ? 320 : M<=8 ? 180 : M<=16 ? 80 : M<=64 ? 25 : 8;
+  const packetDur = M<=8 ? 500 : M<=16 ? 350 : 200;
+
+  for(let vi=0;vi<M;vi++){
+    const v=vals[vi];
+    const showLine=N<=128&&M<=32;
+
+    if(showPacketsOut){
+      // Animate packets from validator to each sampled subnet
+      // Stagger them slightly for visual effect
+      const pDelay = M<=8 ? 60 : 20;
+      validatorSamples[vi].forEach((si, idx)=>{
+        setTimeout(()=>{
+          const p=subPos[si];
+          // draw persistent dashed line first
+          if(showLine){
+            el('line',{x1:v.x,y1:v.y,x2:p.x,y2:p.y,
+              stroke:'#ffd166',
+              strokeWidth:M<=8?0.8:0.4,
+              strokeDasharray:'3 2',
+              opacity:M<=8?0.18:0.10},gLines);
+          }
+          // animated packet (query going out from validator to subnet)
+          const c=el('circle',{cx:v.x,cy:v.y,r:M<=8?3.5:2.5,fill:'#ffd166',opacity:0.9},gOver);
+          const dur=D(packetDur);
+          const x1=v.x,y1=v.y,x2=p.x,y2=p.y;
+          const start=performance.now();
+          function step(now){
+            const t=Math.min((now-start)/dur,1);
+            const ease=t<0.5?2*t*t:1-Math.pow(-2*t+2,2)/2; // ease in-out
+            c.setAttribute('cx',x1+(x2-x1)*ease);
+            c.setAttribute('cy',y1+(y2-y1)*ease);
+            c.setAttribute('opacity',''+(0.9-t*0.6));
+            c.setAttribute('r',''+(M<=8?3.5-t*1.5:2.5-t*1));
+            if(t<1)requestAnimationFrame(step);else c.remove();
+          }
+          requestAnimationFrame(step);
+        }, D(idx * pDelay));
+      });
+    } else if(showLine){
+      // Just draw static lines for very large setups
+      for(const si of validatorSamples[vi]){
+        const p=subPos[si];
+        el('line',{x1:v.x,y1:v.y,x2:p.x,y2:p.y,
+          stroke:'#ffd166',strokeWidth:0.3,strokeDasharray:'2 2',opacity:0.1},gLines);
+      }
+    }
+
+    await dly(valDelay);
+  }
+  // Wait for last packets to finish
+  await dly(showPacketsOut ? D(packetDur) + 300 : 200);
+
+  // ── Step 4+5: Query & Respond ─────────────────────────────────
+  setBadge('QUERYING','#c77dff');
+  setDesc(mode==='attackA'
+    ?`Each validator queries t=${t} nodes/subnet. Adversarial nodes (${(P.pd)}% of nodes) stay SILENT toward targeted validator.`
+    :`Each validator queries t=${t} nodes/subnet — stops at first valid response.`);
+  setStep('4 / 6');
+  await dly(400);
+  setBadge('RESPONDING','#00e5a0');
+  setStep('5 / 6');
+
+  const validatorResults=vals.map(()=>({successes:0,results:{},verdict:undefined}));
+
+  for(let vi=0;vi<M;vi++){
+    const v=vals[vi];
+    const mySampled=validatorSamples[vi];
+    let successes=0;
+    const res={};
+
+    for(const si of mySampled){
+      const sn=network[si];
+      const p=subPos[si];
+      const nodeOrder=[...Array(R).keys()].sort(()=>Math.random()-.5).slice(0,t);
+      const nodeStates={};
+      let sub=false;
+      if(!sn.hasData&&mode==='attackB'){
+        nodeOrder.forEach(ni=>nodeStates[ni]='silent');
+      } else {
+        for(const ni of nodeOrder){
+          const silent=mode==='attackA'&&sn.nodes[ni].adv;
+          if(silent){nodeStates[ni]='silent';}
+          else{nodeStates[ni]='success';sub=true;break;}
+        }
+        if(!sub)nodeOrder.forEach(ni=>{if(!nodeStates[ni])nodeStates[ni]='queried';});
+      }
+      if(sub)successes++;
+      res[si]={success:sub,nodeStates};
+      const color=sub?'#00e5a0':'#ff4d6a';
+      if(N<=256){
+        animLine(v.x,v.y,p.x,p.y,color,200);
+        packet(p.x,p.y,v.x,v.y,color,250,null);
+      }
+      validatorResults[vi]={successes,results:res,verdict:undefined};
+      // update subnet and validator visually
+      updateSubnetEl(si,sn,{postDisperse:true,sampled:true,success:sub,nodeStates});
+      // redraw validators only
+      gNodes.innerHTML='';
+      draw({postDisperse:true,sampledAll:allSampled,validators:validatorResults.map(r=>({...r}))});
+      setCounter(`V${vi+1}: ${successes}/${mySampled.indexOf(si)+1}`);
+      await dly(M>32?30:M>16?80:N<=64?350:N<=256?200:80);
+    }
+    validatorResults[vi]={successes,results:res,verdict:undefined};
+    await dly(150);
+  }
+  await dly(300);
+
+  // ── Step 6: Verdict ───────────────────────────────────────────
+  setStep('6 / 6');
+  for(let vi=0;vi<M;vi++){
+    validatorResults[vi].verdict=validatorResults[vi].successes>=tau;
+    pulse(vals[vi].x,vals[vi].y,validatorResults[vi].verdict?'#00e5a0':'#ff4d6a',vr*1.3,2);
+  }
+  draw({postDisperse:true,sampledAll:allSampled,validators:validatorResults});
+
+  const availCount=validatorResults.filter(v=>v.verdict===true).length;
+  const unavailCount=M-availCount;
+  let msg='';
+  if(mode==='honest'){
+    msg=`Honest result: ${availCount}/${M} validators → AVAILABLE, ${unavailCount}/${M} → UNAVAILABLE. Data recoverable: YES (N_avail=${N} ≥ K+1=${K+1}).`;
+  } else if(mode==='attackA'){
+    const f=validatorResults.filter(v=>v.verdict===false).length;
+    msg=f>0
+      ?`⚡ Attack A: ${f}/${M} validator(s) incorrectly declared UNAVAILABLE. Liveness disrupted! (Data IS available, N_avail=${N} ≥ K+1=${K+1})`
+      :`Attack A failed: all ${M} validators correctly declared AVAILABLE.`;
+  } else {
+    const f=validatorResults.filter(v=>v.verdict===true).length;
+    msg=f>0
+      ?`☠ Attack B: ${f}/${M} validator(s) incorrectly declared AVAILABLE. Data unrecoverable! (N_avail=${dataSubnets.length} < K+1=${K+1})`
+      :`Attack B failed: all ${M} validators correctly declared UNAVAILABLE. (Only ${dataSubnets.length} subnets had data — below K+1=${K+1} threshold)`;
+  }
+  const vc=mode==='attackA'?'#ffd166':mode==='attackB'?'#ff4d6a':'#00e5a0';
+  setBadge('VERDICT',vc);
+  setDesc(msg);
+  setCounter(`${availCount}/${M} validators → Available · τ=${tau} · K=${K}`);
+  await dly(800);
+
+  // ── Chain View & Fork ────────────────────────────────────────
+  // In Cryptarchia, each validator maintains its own local chain view.
+  // There is no global accept/reject — validators that disagree develop
+  // diverging chain tips (a fork). Fork choice resolves by chain weight.
+  setBadge('CHAIN FORK','#c77dff');
+  setStep('+ CHAIN');
+
+  const acceptedVals = validatorResults.filter(v=>v.verdict===true);
+  const rejectedVals = validatorResults.filter(v=>v.verdict===false);
+  const majority = acceptedVals.length > rejectedVals.length;
+  const unanimous = rejectedVals.length===0 || acceptedVals.length===0;
+
+  // --- Draw chain visualization in gOver ---
+  // Position: below the encoder, occupying left portion of screen
+  const chainAreaX = W*0.03;
+  const chainAreaY = H*0.88;
+  const chainAreaW = W*0.70;
+
+  // Common ancestor block (slot n)
+  const ancX = chainAreaX + 40;
+  const ancY = chainAreaY - 10;
+  const bW = 38, bH = 22;
+
+  function drawBlock(gp, x, y, label, sublabel, color, fill){
+    const g2=el('g',{transform:`translate(${x},${y})`},gp);
+    el('rect',{x:-bW/2,y:-bH/2,width:bW,height:bH,rx:3,
+      fill:fill||'#09131f',stroke:color,strokeWidth:1.4},g2);
+    txt(label,{x:0,y:-2,textAnchor:'middle',fill:color,
+      fontSize:7,fontFamily:'JetBrains Mono',fontWeight:'bold'},g2);
+    if(sublabel) txt(sublabel,{x:0,y:8,textAnchor:'middle',fill:color,
+      fontSize:6,fontFamily:'JetBrains Mono',opacity:.7},g2);
+    return g2;
+  }
+
+  function drawArrow(x1,y1,x2,y2,color,dashed){
+    const l=el('line',{x1,y1,x2,y2,stroke:color,strokeWidth:1.2,
+      strokeDasharray:dashed?'4 2':'none',opacity:.8},gOver);
+    // arrowhead
+    const angle=Math.atan2(y2-y1,x2-x1);
+    const ax=x2-6*Math.cos(angle), ay=y2-6*Math.sin(angle);
+    const p=el('polygon',{
+      points:`${x2},${y2} ${ax-3*Math.sin(angle)},${ay+3*Math.cos(angle)} ${ax+3*Math.sin(angle)},${ay-3*Math.cos(angle)}`,
+      fill:color,opacity:.8},gOver);
+    return l;
+  }
+
+  // Draw genesis/parent block
+  drawBlock(gOver, ancX, ancY, 'Block n', 'parent', '#3b5070', '#07111e');
+
+  if(unanimous && acceptedVals.length===M){
+    // ── All agreed: AVAILABLE → single chain extends ──────────
+    const b1X=ancX+80;
+    drawArrow(ancX+bW/2, ancY, b1X-bW/2, ancY, '#00e5a0');
+    drawBlock(gOver, b1X, ancY, 'Block n+1', `${NB} blobs`, '#00e5a0', 'rgba(0,229,160,.08)');
+    // chain continues
+    const b2X=b1X+80;
+    drawArrow(b1X+bW/2, ancY, b2X-bW/2, ancY, '#00e5a0');
+    drawBlock(gOver, b2X, ancY, 'Block n+2', '...', '#1e4a3a', '#07111e');
+    txt('All validators extend the same chain. No fork.',
+      {x:ancX+chainAreaW*.42,y:ancY+28,textAnchor:'middle',fill:'#00e5a0',
+       fontSize:8,fontFamily:'JetBrains Mono'},gOver);
+
+  } else if(unanimous && rejectedVals.length===M){
+    // ── All rejected: slot wasted, no block ───────────────────
+    drawArrow(ancX+bW/2, ancY, ancX+120, ancY, '#ffd166', true);
+    el('circle',{cx:ancX+140,cy:ancY,r:10,fill:'#1a1200',stroke:'#ffd166',strokeWidth:1.2},gOver);
+    txt('∅',{x:ancX+140,y:ancY+4,textAnchor:'middle',fill:'#ffd166',fontSize:11,fontFamily:'JetBrains Mono'},gOver);
+    txt('Slot wasted — all validators rejected. Chain stalls.',
+      {x:ancX+chainAreaW*.42,y:ancY+28,textAnchor:'middle',fill:'#ffd166',
+       fontSize:8,fontFamily:'JetBrains Mono'},gOver);
+
+  } else {
+    // ── FORK: validators disagree ─────────────────────────────
+    const forkX = ancX + 70;
+    const topY  = ancY - 22;  // chain of validators who accepted
+    const botY  = ancY + 22;  // chain of validators who rejected/saw nothing
+
+    // fork point
+    drawArrow(ancX+bW/2, ancY, forkX-6, topY, acceptedVals.length>=rejectedVals.length?'#00e5a0':'#ff4d6a');
+    drawArrow(ancX+bW/2, ancY, forkX-6, botY, rejectedVals.length>acceptedVals.length?'#ffd166':'#ff4d6a');
+
+    // accepted chain tip
+    const accColor = mode==='attackB' ? '#ff4d6a' : '#00e5a0';
+    const accLabel = mode==='attackB' ? '⚠ invalid' : `${NB} blobs`;
+    drawBlock(gOver, forkX+bW/2, topY,
+      mode==='attackB'?'Block n+1*':'Block n+1',
+      accLabel, accColor,
+      mode==='attackB'?'rgba(255,77,106,.08)':'rgba(0,229,160,.07)');
+
+    // rejected chain tip (stall / empty slot)
+    el('circle',{cx:forkX+bW/2,cy:botY,r:10,
+      fill:'#0d1220',stroke:'#ffd166',strokeWidth:1.2},gOver);
+    txt('∅',{x:forkX+bW/2,y:botY+4,textAnchor:'middle',
+      fill:'#ffd166',fontSize:11,fontFamily:'JetBrains Mono'},gOver);
+
+    // validator count labels
+    txt(`${acceptedVals.length} validator${acceptedVals.length!==1?'s':''} → extend`,
+      {x:forkX+bW*1.6,y:topY+4,fill:accColor,fontSize:7.5,fontFamily:'JetBrains Mono'},gOver);
+    txt(`${rejectedVals.length} validator${rejectedVals.length!==1?'s':''} → stall`,
+      {x:forkX+bW*1.6,y:botY+4,fill:'#ffd166',fontSize:7.5,fontFamily:'JetBrains Mono'},gOver);
+
+    // fork choice winner
+    const heavierChain = acceptedVals.length >= rejectedVals.length ? 'top' : 'bot';
+    const winnerX = forkX + bW*1.4 + 80;
+    const winnerY = heavierChain==='top' ? topY : botY;
+    const winnerColor = heavierChain==='top' ? accColor : '#ffd166';
+    drawArrow(forkX+bW*1.4+30, heavierChain==='top'?topY:botY, winnerX-10, winnerY, winnerColor);
+    txt('fork choice →',{x:forkX+bW*1.4+44,y:winnerY-6,fill:winnerColor+'aa',
+      fontSize:6.5,fontFamily:'JetBrains Mono'},gOver);
+    drawBlock(gOver, winnerX+bW/2, winnerY, 'wins', '', winnerColor, 'rgba(0,0,0,.3)');
+
+    // Fork label
+    const forkDesc = mode==='attackA'
+      ? `Attack A fork: ${acceptedVals.length} validators extend the chain (data was available), ${rejectedVals.length} validators stall — their slot is wasted. Fork resolves in favour of the longer chain.`
+      : `Attack B fork: ${acceptedVals.length} validators accepted UNRECOVERABLE data and extend an invalid chain, ${rejectedVals.length} validators correctly stall. If invalid chain wins fork choice, safety is broken.`;
+    txt(forkDesc.length>90?forkDesc.slice(0,90)+'…':forkDesc,
+      {x:ancX+chainAreaW*.45,y:ancY+bH+22,textAnchor:'middle',fill:majority?accColor:'#ffd166',
+       fontSize:7.5,fontFamily:'JetBrains Mono'},gOver);
+  }
+
+  // Pulse on the winning chain
+  await dly(400);
+
+  // Final description
+  let finalDesc='';
+  if(mode==='honest'){
+    finalDesc=`Honest network: all ${M} validators agree → single chain extends with block n+1 containing N_B=${NB} blobs. No fork.`;
+  } else if(mode==='attackA'){
+    if(rejectedVals.length===0)
+      finalDesc=`Attack A failed: adversary could not cause enough failures. All ${M} validators extend the chain. No fork.`;
+    else if(acceptedVals.length===0)
+      finalDesc=`Attack A succeeded on all validators: all ${M} stall. Slot wasted. Chain growth halted this slot.`;
+    else
+      finalDesc=`Attack A fork: ${rejectedVals.length}/${M} validators stall (wasted slot), ${acceptedVals.length}/${M} extend. Chain eventually forks. Liveness disruption — Cryptarchia fork choice resolves this but the slot cost is paid.`;
+  } else {
+    if(acceptedVals.length===0)
+      finalDesc=`Attack B failed: no validator was fooled. Data unrecoverable (N_avail=${dataSubnets.length} < K+1=${K+1}). Chain stays clean.`;
+    else if(rejectedVals.length===0)
+      finalDesc=`Attack B succeeded on all ${M} validators: unrecoverable data enters the chain. Safety failure — block n+1 references data that cannot be reconstructed.`;
+    else
+      finalDesc=`Attack B fork: ${acceptedVals.length}/${M} validators accepted invalid data and extend a corrupt chain, ${rejectedVals.length}/${M} correctly stall. If the corrupt chain wins Cryptarchia fork choice, safety is broken.`;
+  }
+
+  const finalColor = mode==='attackA'?'#ffd166':mode==='attackB'?'#ff4d6a':'#00e5a0';
+  setBadge(unanimous&&rejectedVals.length===M?'STALL':unanimous?'CHAIN EXTENDS':'FORK', finalColor);
+  setDesc(finalDesc);
+  setCounter(`${acceptedVals.length} extend · ${rejectedVals.length} stall · N_B=${NB} · K=${K}`);
+}
+
+// ── CONTROLS ─────────────────────────────────────────────────────
+document.querySelectorAll('.mb').forEach(b=>{
+  b.onclick=()=>{
+    if(running)return;
+    mode=b.dataset.m;
+    document.querySelectorAll('.mb').forEach(x=>x.className='mb');
+    b.className=`mb ${mode==='honest'?'ah':mode==='attackA'?'aa':'ab'}`;
+    buildNet();draw();
+  };
+});
+
+document.getElementById('start-btn').onclick=async()=>{
+  if(running)return;
+  running=true;
+  document.getElementById('start-btn').disabled=true;
+  document.getElementById('start-btn').className='btn run';
+  document.getElementById('start-btn').textContent='● ANIMATING...';
+  buildNet();
+  try{await animate();}catch(ex){console.error(ex);}
+  running=false;
+  document.getElementById('start-btn').disabled=false;
+  document.getElementById('start-btn').className='btn';
+  document.getElementById('start-btn').textContent='▶  RUN AGAIN';
+};
+
+document.getElementById('reset-btn').onclick=()=>{
+  timers.forEach(clearTimeout);timers=[];
+  running=false;
+  document.getElementById('start-btn').disabled=false;
+  document.getElementById('start-btn').className='btn';
+  document.getElementById('start-btn').textContent='▶  START ANIMATION';
+  setBadge('IDLE','#405a78');
+  setDesc('Configure parameters and select an attack mode, then press Start.');
+  setStep('');setCounter('');
+  updateInfo();
+  buildNet();draw();
+};
+
+// ── INIT ──────────────────────────────────────────────────────────
+buildNet();draw();setBadge('IDLE','#405a78');
+</script>
+</body>
+</html>
