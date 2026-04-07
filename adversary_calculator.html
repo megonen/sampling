@@ -112,6 +112,10 @@ function PB_full(pd, R, t, N, K, S, tau) {
 // Attack A mean-field crossover: p_d where E[failures] = S-tau, i.e. p_d^t = (S-tau)/S
 function th_A(tau, S, t) { return Math.pow(Math.max(0, (S - tau) / S), 1 / t); }
 function th_B(e, R) { return Math.pow(Math.max(0, 1 - 1 / e), 1 / R); }
+// Attack B feasibility threshold: p_d >= 1 - (1-1/e)^{1/R}
+function th_feas(e, R) { return 1 - Math.pow(Math.max(0, 1 - 1 / e), 1 / R); }
+// Attack B impossibility bound: tau > S/e => P_B = 0
+function isAttackBImpossible(tau, S, e) { return tau > S / e; }
 
 // ─── UI Components ─────────────────────────────────────────────
 function Tip({ text }) {
@@ -165,33 +169,34 @@ function SecHead({ children }) {
   }, children);
 }
 
-function RegimeBar({ thA, thRecov, paVal, pbVal, pd }) {
-  // thA = formal Attack A threshold (τ/S)^{1/R}
-  // thRecov = global recovery threshold (1-1/e)^{1/R} — hard boundary for recoverability
-  // P_A and P_B are continuous — no hard boundary between "A only" and "A+B"
+function RegimeBar({ thA, thRecov, thFeas, paVal, pbVal, pd, bImpossible }) {
   const safe = Math.min(thA, 1) * 100;
   const mid = Math.max(0, (Math.min(thRecov, 1) - Math.min(thA, 1))) * 100;
   const danger = Math.max(0, 100 - safe - mid);
   const marker = pd * 100;
+  const feasMarker = (thFeas || 0) * 100;
   const paLabel = paVal < 0.01 ? "<1%" : (paVal * 100).toFixed(0) + "%";
-  const pbLabel = pbVal < 0.01 ? "<1%" : (pbVal * 100).toFixed(0) + "%";
+  const pbLabel = bImpossible ? "0 (impossible)" : pbVal < 0.01 ? "<1%" : (pbVal * 100).toFixed(0) + "%";
   return React.createElement("div", { style: { marginTop: 8 } },
     React.createElement("div", { style: { position: "relative", height: 22, borderRadius: 5, overflow: "hidden", display: "flex", fontSize: 10, fontWeight: "bold" } },
       React.createElement("div", { style: { width: safe + "%", background: "#27500A", display: "flex", alignItems: "center", justifyContent: "center", color: "#3fb950" } }, safe > 12 ? "SAFE" : ""),
       React.createElement("div", { style: { width: mid + "%", background: "#4a2800", display: "flex", alignItems: "center", justifyContent: "center", color: C.yellow } }, mid > 16 ? "A dominant" : mid > 8 ? "A" : ""),
       React.createElement("div", { style: { width: danger + "%", background: "#3d0000", display: "flex", alignItems: "center", justifyContent: "center", color: C.red } }, danger > 14 ? "recovery threat" : danger > 7 ? "rec." : ""),
-      React.createElement("div", { style: { position: "absolute", top: 0, bottom: 0, left: marker + "%", width: 2, background: C.teal, transform: "translateX(-50%)" } })
+      React.createElement("div", { style: { position: "absolute", top: 0, bottom: 0, left: marker + "%", width: 2, background: C.teal, transform: "translateX(-50%)" } }),
+      thFeas > 0 && React.createElement("div", { style: { position: "absolute", top: 0, bottom: 0, left: feasMarker + "%", width: 2, background: C.orange, transform: "translateX(-50%)", opacity: 0.7 } })
     ),
-    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 10, fontFamily: "monospace", color: C.muted, marginTop: 3 } },
+    React.createElement("div", { style: { display: "flex", justifyContent: "space-between", fontSize: 10, fontFamily: "monospace", color: C.muted, marginTop: 3, flexWrap: "wrap", gap: 4 } },
       React.createElement("span", null, "0%"),
-      React.createElement("span", { style: { color: C.yellow } }, "A threshold: " + (thA * 100).toFixed(1) + "%"),
+      thFeas > 0 && React.createElement("span", { style: { color: C.orange } }, "B feas: " + feasMarker.toFixed(1) + "%"),
+      React.createElement("span", { style: { color: C.yellow } }, "A crossover: " + (thA * 100).toFixed(1) + "%"),
       React.createElement("span", { style: { color: C.red } }, "recovery: " + (thRecov * 100).toFixed(1) + "%"),
       React.createElement("span", null, "100%")
     ),
     React.createElement("div", { style: { marginTop: 6, fontSize: 11, fontFamily: "monospace", display: "flex", gap: 20, flexWrap: "wrap" } },
       React.createElement("span", null, React.createElement("span", { style: { color: C.yellow } }, "P_A = " + paLabel), React.createElement("span", { style: { color: C.muted } }, " (liveness)")),
       React.createElement("span", null, React.createElement("span", { style: { color: C.red } }, "P_B = " + pbLabel), React.createElement("span", { style: { color: C.muted } }, " (safety — continuous, no hard threshold)")),
-      React.createElement("span", null, React.createElement("span", { style: { color: C.teal } }, "│"), React.createElement("span", { style: { color: C.muted } }, " current p_d"))
+      React.createElement("span", null, React.createElement("span", { style: { color: C.teal } }, "│"), React.createElement("span", { style: { color: C.muted } }, " p_d")),
+      thFeas > 0 && React.createElement("span", null, React.createElement("span", { style: { color: C.orange } }, "│"), React.createElement("span", { style: { color: C.muted } }, " B feasibility"))
     )
   );
 }
@@ -309,7 +314,7 @@ function App() {
     // Header
     React.createElement("div", { style: { marginBottom: 20 } },
       React.createElement("div", { style: { fontSize: 10, letterSpacing: "0.18em", color: C.muted, fontFamily: "monospace", marginBottom: 5 } },
-        "NOMOS DA — ADVERSARY ATTACK SURFACE CALCULATOR"
+        "LOGOS BLOCKCHAIN DA LAYER — ADVERSARY ATTACK SURFACE CALCULATOR"
       ),
       React.createElement("h1", { style: { margin: 0, fontSize: 21, fontWeight: 700, color: C.text, letterSpacing: "-0.02em" } },
         "Selective Availability Attack"
@@ -317,7 +322,7 @@ function App() {
       React.createElement("div", { style: { marginTop: 4, fontSize: 11, color: C.muted } },
         "Attack A (available→unavailable) exploits Type II error · ",
         "Attack B (unavailable→available) exploits Type I error · ",
-        "Silence-only adversary model"
+        "Silence-only adversary model (no-false-proof assumption)"
       )
     ),
 
@@ -338,17 +343,20 @@ function App() {
       React.createElement("div", { style: { display: "flex", flexWrap: "wrap", gap: 10, marginTop: 14 } },
         React.createElement(StatCard, { label: "Attack A  P_A", tip: `P(validator fails on available data)\nAdversary needs ${failsNeeded} failure(s) out of S=${S}`, value: paVal < 1e-6 ? "≈ 0" : paVal > 0.9999 ? "≈ 1" : paVal.toExponential(3), color: C.yellow }),
         React.createElement(StatCard, { label: "Attack B  P_B", tip: `P(validator accepts unavailable data)\nAdversary needs ${hitsNeeded} hit(s). Includes partial capture — any subnet with at least 1 adversarial node holding data can produce a false positive. Higher t makes this easier.`, value: pbVal < 1e-6 ? "≈ 0" : pbVal > 0.9999 ? "≈ 1" : pbVal.toExponential(3), color: C.red }),
-        React.createElement(StatCard, { label: "P_fail^eff", tip: `Under binomial approximation: P_fail^eff = p_d^t = ${(Math.pow(pdFrac, tClamped)).toExponential(3)}. This is R-independent. At t=R it equals p_d^R (full capture only).`, value: pfVal.toExponential(3), color: C.blue }),
-        React.createElement(StatCard, { label: "P_full = p_d^R", tip: "Full capture probability per subnetwork = p_d^R. Governs regime thresholds. Partial capture also contributes to Attack B under the updated model.", value: pfullVal.toExponential(3), color: C.purple }),
-        React.createElement(StatCard, { label: "Failures needed (A)", tip: `S − τ + 1 = ${S} − ${tauClamped} + 1.\nHigher τ → fewer failures needed → easier for Attack A.`, value: failsNeeded, color: C.yellow }),
+        React.createElement(StatCard, { label: "P_fail^eff = q_A", tip: `Per-subnetwork false-failure probability (Layer 2).\nq_A = p_d^t = ${(Math.pow(pdFrac, tClamped)).toExponential(3)}.\nR-independent under binomial approximation.\nFeeds into P_A via (S, τ) decision rule (Layer 3).`, value: pfVal.toExponential(3), color: C.blue }),
+        React.createElement(StatCard, { label: "P_full = p_d^R", tip: "Full capture probability per subnetwork = p_d^R. Governs global recovery threshold.", value: pfullVal.toExponential(3), color: C.purple }),
+        React.createElement(StatCard, { label: "Failures needed (A)", tip: `S − τ + 1 = ${S} − ${tauClamped} + 1 = ${failsNeeded}.\nFailure budget = S − τ = ${S - tauClamped}.\nHigher τ → fewer failures needed → easier for Attack A.`, value: failsNeeded, color: C.yellow }),
         React.createElement(StatCard, { label: "Hits needed (B)", tip: `τ = ${tauClamped}.\nHigher τ → more hits needed → harder for Attack B.`, value: hitsNeeded, color: C.red }),
-        React.createElement(StatCard, { label: "Regime", tip: `Attack A mean-field crossover (1−τ/S)^{1/t} = ${(thA*100).toFixed(1)}% — p_d where E[failures]=S−τ. Note: P_A≈0.4 at this crossover, not zero.\nGlobal recovery threshold (1−1/e)^{1/R} = ${(thB*100).toFixed(1)}% — hard boundary for recoverability only, not Attack B onset.\nBoth P_A and P_B grow continuously with p_d.`, value: regime, color: regimeColor }),
+        React.createElement(StatCard, { label: "B feasibility p_d", tip: `Attack B feasibility threshold: p_d^feas = 1 − (1−1/e)^{1/R} = ${(th_feas(e, R)*100).toFixed(1)}%.\nThe adversary needs at least one node in K subnetworks for selective dispersal.\nMuch lower than the global recovery threshold (${(thB*100).toFixed(1)}%).`, value: (th_feas(e, R)*100).toFixed(1) + "%", color: C.orange }),
+        React.createElement(StatCard, { label: "B impossible?", tip: `Attack B impossibility bound: τ/S > 1/e ⟹ P_B = 0.\nCurrent: τ/S = ${tauClamped}/${S} = ${(tauClamped/S).toFixed(3)}, 1/e = ${(1/e).toFixed(3)}.\n${isAttackBImpossible(tauClamped, S, e) ? "YES — Attack B is structurally impossible at this τ." : "NO — τ/S ≤ 1/e, Attack B is feasible."}`, value: isAttackBImpossible(tauClamped, S, e) ? "YES ✓" : "NO", color: isAttackBImpossible(tauClamped, S, e) ? C.green : C.muted }),
+        React.createElement(StatCard, { label: "Crossover p_d (A)", tip: `Attack A crossover: p_d^cross = (1−τ/S)^{1/t}.\nAt this p_d, expected failures = failure budget.\nEncodes joint effect of (τ, S, t).`, value: (thA*100).toFixed(1) + "%", color: C.yellow }),
+        React.createElement(StatCard, { label: "Regime", tip: `Attack A crossover (1−τ/S)^{1/t} = ${(thA*100).toFixed(1)}%.\nGlobal recovery threshold (1−1/e)^{1/R} = ${(thB*100).toFixed(1)}%.\nAttack B feasibility (1−(1−1/e)^{1/R}) = ${(th_feas(e,R)*100).toFixed(1)}%.\nBoth P_A and P_B grow continuously with p_d.`, value: regime, color: regimeColor }),
       ),
 
       // Regime bar
       React.createElement("div", { style: { marginTop: 14 } },
         React.createElement("div", { style: { fontSize: 10, color: C.muted, fontFamily: "monospace", marginBottom: 4 } }, "REGIME BAR — current p_d position (teal marker)"),
-        React.createElement(RegimeBar, { thA, thRecov: thB, paVal, pbVal, pd: pdFrac })
+        React.createElement(RegimeBar, { thA, thRecov: thB, thFeas: th_feas(e, R), paVal, pbVal, pd: pdFrac, bImpossible: isAttackBImpossible(tauClamped, S, e) })
       )
     ),
 
@@ -372,11 +380,31 @@ function App() {
       // ── Overview tab ──
       tab === "overview" && React.createElement(React.Fragment, null,
         React.createElement(SecHead, null, "Attack A vs Attack B — same p_d axis"),
-        React.createElement("div", { style: { fontSize: 11, color: C.muted, marginBottom: 12 } },
-          `Current params: R=${R}, t=${tClamped}, S=${S}, τ=${tauClamped}, e=${e}, N=${N}  ·  `,
+        React.createElement("div", { style: { fontSize: 11, color: C.muted, marginBottom: 8 } },
+          `Parameters: R=${R}, t=${tClamped}, S=${S}, τ=${tauClamped}, e=${e}, N=${N}, K=${Math.floor(N/e)}  ·  `,
           React.createElement("span", { style: { color: C.yellow } }, `Attack A needs ${failsNeeded} failure(s)`),
           "  ·  ",
-          React.createElement("span", { style: { color: C.red } }, `Attack B needs ${hitsNeeded} hit(s)`)
+          React.createElement("span", { style: { color: C.red } }, `Attack B needs ${hitsNeeded} hit(s)`),
+          isAttackBImpossible(tauClamped, S, e) ? React.createElement("span", { style: { color: C.green, fontWeight: "bold" } }, `  ·  τ/S > 1/e → Attack B impossible`) : null
+        ),
+        // Dependency chain
+        React.createElement("div", { style: { fontSize: 10, fontFamily: "monospace", color: C.muted, marginBottom: 12, padding: "8px 12px", background: C.panel2, borderRadius: 6, border: `1px solid ${C.border}` } },
+          React.createElement("span", { style: { color: C.text } }, "Dependency chain: "),
+          React.createElement("span", { style: { color: C.blue } }, `(N=${N}, e=${e})`),
+          " → ",
+          React.createElement("span", { style: { color: C.blue } }, `K=${Math.floor(N/e)}`),
+          " → ",
+          React.createElement("span", { style: { color: C.purple } }, `(p_d, R=${R}, t=${tClamped})`),
+          " → ",
+          React.createElement("span", { style: { color: C.yellow } }, `q_A=${pfVal.toExponential(2)}`),
+          ", ",
+          React.createElement("span", { style: { color: C.red } }, `q_B=${pEff(pdFrac, R, tClamped, N, Math.floor(N/e), 1.0).toExponential(2)}`),
+          " → ",
+          React.createElement("span", { style: { color: C.green } }, `(S=${S}, τ=${tauClamped})`),
+          " → ",
+          React.createElement("span", { style: { color: C.yellow } }, `P_A=${paVal.toExponential(2)}`),
+          ", ",
+          React.createElement("span", { style: { color: C.red } }, `P_B=${pbVal.toExponential(2)}`)
         ),
         React.createElement("div", { style: { display: "flex", gap: 16, flexWrap: "wrap" } },
           React.createElement(AttackChart, {
@@ -400,7 +428,9 @@ function App() {
           React.createElement("span", { style: { color: C.yellow } }, "τ↑ → Attack A easier (S−τ+1 failures needed)"),
           "  ·  ",
           React.createElement("span", { style: { color: C.red } }, "τ↑ → Attack B harder (τ hits needed)"),
-          ` · τ=S (τ=${S}) is worst for A (1 failure), best for B (${S} hits)`
+          `  ·  τ=S (τ=${S}) is worst for A (1 failure), best for B (${S} hits)`,
+          `  ·  `,
+          React.createElement("span", { style: { color: C.green } }, `Impossibility: τ > S/e = ${(S/e).toFixed(0)} → P_B = 0`)
         ),
         React.createElement("div", { style: { display: "flex", gap: 16, flexWrap: "wrap" } },
           React.createElement(AttackChart, {
@@ -424,9 +454,9 @@ function App() {
           React.createElement("div", { style: { fontSize: 10, color: C.muted, fontFamily: "monospace", marginBottom: 6 } }, "REGIME BARS — how τ shifts Attack A threshold (Attack B threshold is τ-independent)"),
           tauVals.map(tv => React.createElement("div", { key: tv, style: { marginBottom: 8 } },
             React.createElement("div", { style: { fontSize: 10, fontFamily: "monospace", color: C.muted, marginBottom: 2 } },
-              `τ=${tv}  →  A needs ${S-tv+1} failure(s)${tv===S?' ← worst for A':tv===1?' ← best for A':''}  ·  B needs ${tv} hit(s)${tv===1?' ← worst for B':tv===S?' ← best for B':''}  ·  A threshold: ${(th_A(tv, S, tClamped)*100).toFixed(1)}%`
+              `τ=${tv}  →  A needs ${S-tv+1} failure(s)${tv===S?' ← worst for A':tv===1?' ← best for A':''}  ·  B needs ${tv} hit(s)${tv===1?' ← worst for B':tv===S?' ← best for B':''}  ·  A crossover: ${(th_A(tv, S, tClamped)*100).toFixed(1)}%${isAttackBImpossible(tv, S, e) ? '  ·  B IMPOSSIBLE (τ>S/e)' : ''}`
             ),
-            React.createElement(RegimeBar, { thA: th_A(tv, S, tClamped), thRecov: thB, paVal: PA(pdFrac, R, tClamped, S, tv), pbVal: PB_full(pdFrac, R, tClamped, N, Math.floor(N/e), S, tv), pd: pdFrac })
+            React.createElement(RegimeBar, { thA: th_A(tv, S, tClamped), thRecov: thB, thFeas: th_feas(e, R), paVal: PA(pdFrac, R, tClamped, S, tv), pbVal: PB_full(pdFrac, R, tClamped, N, Math.floor(N/e), S, tv), pd: pdFrac, bImpossible: isAttackBImpossible(tv, S, e) })
           ))
         )
       ),
@@ -460,7 +490,7 @@ function App() {
         ),
         React.createElement("div", { style: { marginTop: 14, padding: "10px 14px", background: C.panel2, borderRadius: 8, border: `1px solid ${C.border}`, fontSize: 11, color: C.muted } },
           React.createElement("span", { style: { color: C.purple } }, "Key insight: "),
-          `t is a tradeoff parameter between Attack A and Attack B. Under the binomial approximation P_fail^eff = p_d^t, so higher t reduces Attack A directly. The Attack A crossover threshold is (1−τ/S)^{1/t} — it shifts right as t increases. Higher t also raises p_samp, making Attack B easier. At t=R, Attack A is maximally protected but Attack B exposure is maximised.`
+          `t is a tradeoff parameter between Attack A and Attack B. Under the binomial approximation q_A = p_d^t, so higher t reduces Attack A directly. The Attack A crossover is (1−τ/S)^{1/t} — it shifts right as t increases. Higher t also raises p_samp, making Attack B easier. At t=R, Attack A is maximally protected but Attack B exposure is maximised. The jointly optimal t* should minimise max{P_A, P_B}.`
         )
       ),
 
@@ -494,9 +524,9 @@ function App() {
           React.createElement("div", { style: { fontSize: 10, color: C.muted, fontFamily: "monospace", marginBottom: 6 } }, "REGIME BARS — how R shifts both thresholds"),
           rVals.map(rv => React.createElement("div", { key: rv, style: { marginBottom: 8 } },
             React.createElement("div", { style: { fontSize: 10, fontFamily: "monospace", color: C.muted, marginBottom: 2 } },
-              `R=${rv}  →  A threshold: ${(th_A(tauClamped, S, Math.min(tClamped, rv))*100).toFixed(1)}%  ·  B threshold: ${(th_B(e, rv)*100).toFixed(1)}%  ·  P_full at p_d=${pd}%: ${Math.pow(pdFrac, rv).toExponential(2)}`
+              `R=${rv}  →  A crossover: ${(th_A(tauClamped, S, Math.min(tClamped, rv))*100).toFixed(1)}%  ·  B feas: ${(th_feas(e, rv)*100).toFixed(1)}%  ·  Recovery: ${(th_B(e, rv)*100).toFixed(1)}%  ·  p_d^R at p_d=${pd}%: ${Math.pow(pdFrac, rv).toExponential(2)}`
             ),
-            React.createElement(RegimeBar, { thA: th_A(tauClamped, S, Math.min(tClamped, rv)), thRecov: th_B(e, rv), paVal: PA(pdFrac, rv, Math.min(tClamped, rv), S, tauClamped), pbVal: PB_full(pdFrac, rv, Math.min(tClamped, rv), N, Math.floor(N/e), S, tauClamped), pd: pdFrac })
+            React.createElement(RegimeBar, { thA: th_A(tauClamped, S, Math.min(tClamped, rv)), thRecov: th_B(e, rv), thFeas: th_feas(e, rv), paVal: PA(pdFrac, rv, Math.min(tClamped, rv), S, tauClamped), pbVal: PB_full(pdFrac, rv, Math.min(tClamped, rv), N, Math.floor(N/e), S, tauClamped), pd: pdFrac, bImpossible: isAttackBImpossible(tauClamped, S, e) })
           ))
         )
       )
