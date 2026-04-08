@@ -114,8 +114,8 @@ function th_A(tau, S, t) { return Math.pow(Math.max(0, (S - tau) / S), 1 / t); }
 function th_B(e, R) { return Math.pow(Math.max(0, 1 - 1 / e), 1 / R); }
 // Attack B feasibility threshold: p_d >= 1 - (1-1/e)^{1/R}
 function th_feas(e, R) { return 1 - Math.pow(Math.max(0, 1 - 1 / e), 1 / R); }
-// Attack B impossibility bound: tau > S/e => P_B = 0
-function isAttackBImpossible(tau, S, e) { return tau > S / e; }
+// Attack B suppression regime: tau > S/e => P_B exponentially suppressed
+function isAttackBSuppressed(tau, S, e) { return tau > S / e; }
 
 // ─── UI Components ─────────────────────────────────────────────
 function Tip({ text }) {
@@ -169,14 +169,14 @@ function SecHead({ children }) {
   }, children);
 }
 
-function RegimeBar({ thA, thRecov, thFeas, paVal, pbVal, pd, bImpossible }) {
+function RegimeBar({ thA, thRecov, thFeas, paVal, pbVal, pd, bSuppressed }) {
   const safe = Math.min(thA, 1) * 100;
   const mid = Math.max(0, (Math.min(thRecov, 1) - Math.min(thA, 1))) * 100;
   const danger = Math.max(0, 100 - safe - mid);
   const marker = pd * 100;
   const feasMarker = (thFeas || 0) * 100;
   const paLabel = paVal < 0.01 ? "<1%" : (paVal * 100).toFixed(0) + "%";
-  const pbLabel = bImpossible ? "0 (impossible)" : pbVal < 0.01 ? "<1%" : (pbVal * 100).toFixed(0) + "%";
+  const pbLabel = bSuppressed ? (pbVal < 0.01 ? "<1% (suppressed)" : (pbVal * 100).toFixed(0) + "% (suppressed)") : pbVal < 0.01 ? "<1%" : (pbVal * 100).toFixed(0) + "%";
   return React.createElement("div", { style: { marginTop: 8 } },
     React.createElement("div", { style: { position: "relative", height: 22, borderRadius: 5, overflow: "hidden", display: "flex", fontSize: 10, fontWeight: "bold" } },
       React.createElement("div", { style: { width: safe + "%", background: "#27500A", display: "flex", alignItems: "center", justifyContent: "center", color: "#3fb950" } }, safe > 12 ? "SAFE" : ""),
@@ -348,7 +348,7 @@ function App() {
         React.createElement(StatCard, { label: "Failures needed (A)", tip: `S − τ + 1 = ${S} − ${tauClamped} + 1 = ${failsNeeded}.\nFailure budget = S − τ = ${S - tauClamped}.\nHigher τ → fewer failures needed → easier for Attack A.`, value: failsNeeded, color: C.yellow }),
         React.createElement(StatCard, { label: "Hits needed (B)", tip: `τ = ${tauClamped}.\nHigher τ → more hits needed → harder for Attack B.`, value: hitsNeeded, color: C.red }),
         React.createElement(StatCard, { label: "B feasibility p_d", tip: `Attack B feasibility threshold: p_d^feas = 1 − (1−1/e)^{1/R} = ${(th_feas(e, R)*100).toFixed(1)}%.\nThe adversary needs at least one node in K subnetworks for selective dispersal.\nMuch lower than the global recovery threshold (${(thB*100).toFixed(1)}%).`, value: (th_feas(e, R)*100).toFixed(1) + "%", color: C.orange }),
-        React.createElement(StatCard, { label: "B impossible?", tip: `Attack B impossibility bound: τ/S > 1/e ⟹ P_B = 0.\nCurrent: τ/S = ${tauClamped}/${S} = ${(tauClamped/S).toFixed(3)}, 1/e = ${(1/e).toFixed(3)}.\n${isAttackBImpossible(tauClamped, S, e) ? "YES — Attack B is structurally impossible at this τ." : "NO — τ/S ≤ 1/e, Attack B is feasible."}`, value: isAttackBImpossible(tauClamped, S, e) ? "YES ✓" : "NO", color: isAttackBImpossible(tauClamped, S, e) ? C.green : C.muted }),
+        React.createElement(StatCard, { label: "B suppressed?", tip: `Attack B suppression: τ/S > 1/e ⟹ P_B exponentially suppressed.\nP_B ≤ P(Bin(S,1/e) ≥ τ) — nonzero but drops rapidly.\nCurrent: τ/S = ${tauClamped}/${S} = ${(tauClamped/S).toFixed(3)}, 1/e = ${(1/e).toFixed(3)}.\n${isAttackBSuppressed(tauClamped, S, e) ? "YES — τ/S > 1/e, P_B well below expected threshold." : "NO — τ/S ≤ 1/e, Attack B operates above expected threshold."}`, value: isAttackBSuppressed(tauClamped, S, e) ? "YES ✓" : "NO", color: isAttackBSuppressed(tauClamped, S, e) ? C.green : C.muted }),
         React.createElement(StatCard, { label: "Crossover p_d (A)", tip: `Attack A crossover: p_d^cross = (1−τ/S)^{1/t}.\nAt this p_d, expected failures = failure budget.\nEncodes joint effect of (τ, S, t).`, value: (thA*100).toFixed(1) + "%", color: C.yellow }),
         React.createElement(StatCard, { label: "Regime", tip: `Attack A crossover (1−τ/S)^{1/t} = ${(thA*100).toFixed(1)}%.\nGlobal recovery threshold (1−1/e)^{1/R} = ${(thB*100).toFixed(1)}%.\nAttack B feasibility (1−(1−1/e)^{1/R}) = ${(th_feas(e,R)*100).toFixed(1)}%.\nBoth P_A and P_B grow continuously with p_d.`, value: regime, color: regimeColor }),
       ),
@@ -356,7 +356,7 @@ function App() {
       // Regime bar
       React.createElement("div", { style: { marginTop: 14 } },
         React.createElement("div", { style: { fontSize: 10, color: C.muted, fontFamily: "monospace", marginBottom: 4 } }, "REGIME BAR — current p_d position (teal marker)"),
-        React.createElement(RegimeBar, { thA, thRecov: thB, thFeas: th_feas(e, R), paVal, pbVal, pd: pdFrac, bImpossible: isAttackBImpossible(tauClamped, S, e) })
+        React.createElement(RegimeBar, { thA, thRecov: thB, thFeas: th_feas(e, R), paVal, pbVal, pd: pdFrac, bSuppressed: isAttackBSuppressed(tauClamped, S, e) })
       )
     ),
 
@@ -385,7 +385,7 @@ function App() {
           React.createElement("span", { style: { color: C.yellow } }, `Attack A needs ${failsNeeded} failure(s)`),
           "  ·  ",
           React.createElement("span", { style: { color: C.red } }, `Attack B needs ${hitsNeeded} hit(s)`),
-          isAttackBImpossible(tauClamped, S, e) ? React.createElement("span", { style: { color: C.green, fontWeight: "bold" } }, `  ·  τ/S > 1/e → Attack B impossible`) : null
+          isAttackBSuppressed(tauClamped, S, e) ? React.createElement("span", { style: { color: C.green, fontWeight: "bold" } }, `  ·  τ/S > 1/e → Attack B suppressed`) : null
         ),
         // Dependency chain
         React.createElement("div", { style: { fontSize: 10, fontFamily: "monospace", color: C.muted, marginBottom: 12, padding: "8px 12px", background: C.panel2, borderRadius: 6, border: `1px solid ${C.border}` } },
@@ -430,7 +430,7 @@ function App() {
           React.createElement("span", { style: { color: C.red } }, "τ↑ → Attack B harder (τ hits needed)"),
           `  ·  τ=S (τ=${S}) is worst for A (1 failure), best for B (${S} hits)`,
           `  ·  `,
-          React.createElement("span", { style: { color: C.green } }, `Impossibility: τ > S/e = ${(S/e).toFixed(0)} → P_B = 0`)
+          React.createElement("span", { style: { color: C.green } }, `Suppression: τ > S/e = ${(S/e).toFixed(0)} → P_B exponentially small`)
         ),
         React.createElement("div", { style: { display: "flex", gap: 16, flexWrap: "wrap" } },
           React.createElement(AttackChart, {
@@ -454,9 +454,9 @@ function App() {
           React.createElement("div", { style: { fontSize: 10, color: C.muted, fontFamily: "monospace", marginBottom: 6 } }, "REGIME BARS — how τ shifts Attack A threshold (Attack B threshold is τ-independent)"),
           tauVals.map(tv => React.createElement("div", { key: tv, style: { marginBottom: 8 } },
             React.createElement("div", { style: { fontSize: 10, fontFamily: "monospace", color: C.muted, marginBottom: 2 } },
-              `τ=${tv}  →  A needs ${S-tv+1} failure(s)${tv===S?' ← worst for A':tv===1?' ← best for A':''}  ·  B needs ${tv} hit(s)${tv===1?' ← worst for B':tv===S?' ← best for B':''}  ·  A crossover: ${(th_A(tv, S, tClamped)*100).toFixed(1)}%${isAttackBImpossible(tv, S, e) ? '  ·  B IMPOSSIBLE (τ>S/e)' : ''}`
+              `τ=${tv}  →  A needs ${S-tv+1} failure(s)${tv===S?' ← worst for A':tv===1?' ← best for A':''}  ·  B needs ${tv} hit(s)${tv===1?' ← worst for B':tv===S?' ← best for B':''}  ·  A crossover: ${(th_A(tv, S, tClamped)*100).toFixed(1)}%${isAttackBSuppressed(tv, S, e) ? '  ·  B SUPPRESSED (τ>S/e)' : ''}`
             ),
-            React.createElement(RegimeBar, { thA: th_A(tv, S, tClamped), thRecov: thB, thFeas: th_feas(e, R), paVal: PA(pdFrac, R, tClamped, S, tv), pbVal: PB_full(pdFrac, R, tClamped, N, Math.floor(N/e), S, tv), pd: pdFrac, bImpossible: isAttackBImpossible(tv, S, e) })
+            React.createElement(RegimeBar, { thA: th_A(tv, S, tClamped), thRecov: thB, thFeas: th_feas(e, R), paVal: PA(pdFrac, R, tClamped, S, tv), pbVal: PB_full(pdFrac, R, tClamped, N, Math.floor(N/e), S, tv), pd: pdFrac, bSuppressed: isAttackBSuppressed(tv, S, e) })
           ))
         )
       ),
@@ -526,7 +526,7 @@ function App() {
             React.createElement("div", { style: { fontSize: 10, fontFamily: "monospace", color: C.muted, marginBottom: 2 } },
               `R=${rv}  →  A crossover: ${(th_A(tauClamped, S, Math.min(tClamped, rv))*100).toFixed(1)}%  ·  B feas: ${(th_feas(e, rv)*100).toFixed(1)}%  ·  Recovery: ${(th_B(e, rv)*100).toFixed(1)}%  ·  p_d^R at p_d=${pd}%: ${Math.pow(pdFrac, rv).toExponential(2)}`
             ),
-            React.createElement(RegimeBar, { thA: th_A(tauClamped, S, Math.min(tClamped, rv)), thRecov: th_B(e, rv), thFeas: th_feas(e, rv), paVal: PA(pdFrac, rv, Math.min(tClamped, rv), S, tauClamped), pbVal: PB_full(pdFrac, rv, Math.min(tClamped, rv), N, Math.floor(N/e), S, tauClamped), pd: pdFrac, bImpossible: isAttackBImpossible(tauClamped, S, e) })
+            React.createElement(RegimeBar, { thA: th_A(tauClamped, S, Math.min(tClamped, rv)), thRecov: th_B(e, rv), thFeas: th_feas(e, rv), paVal: PA(pdFrac, rv, Math.min(tClamped, rv), S, tauClamped), pbVal: PB_full(pdFrac, rv, Math.min(tClamped, rv), N, Math.floor(N/e), S, tauClamped), pd: pdFrac, bSuppressed: isAttackBSuppressed(tauClamped, S, e) })
           ))
         )
       )

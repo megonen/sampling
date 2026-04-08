@@ -76,7 +76,7 @@ input[type=number]:focus{border-color:var(--blue)}
       <div class="info-row"><span>A crossover</span><span class="info-val" id="iv-thA">?</span></div>
       <div class="info-row"><span>B feasibility</span><span class="info-val" id="iv-feas">?</span></div>
       <div class="info-row"><span>Recovery threshold</span><span class="info-val" id="iv-thB">?</span></div>
-      <div class="info-row"><span>B impossible?</span><span class="info-val" id="iv-bimp">?</span></div>
+      <div class="info-row"><span>B suppressed?</span><span class="info-val" id="iv-bimp">?</span></div>
       <div class="info-row"><span>Failures needed (A)</span><span class="info-val" id="iv-fa">?</span></div>
       <div class="info-row"><span>Hits needed (B)</span><span class="info-val" id="iv-hb">?</span></div>
     </div>
@@ -186,8 +186,8 @@ function validateParams(){
   if(P.t>P.R) warns.push(`⚠ t(${P.t}) > R(${P.R}) — t clamped to R`);
   if(P.S>P.N) warns.push(`⚠ S(${P.S}) > N(${P.N}) — S clamped to N`);
   if(P.N%P.e!==0) warns.push(`⚠ N(${P.N}) not divisible by e(${P.e}) — K will be floored`);
-  const bImpossible=P.tau>P.S/P.e;
-  if(bImpossible) warns.push(`ℹ τ/S = ${(P.tau/P.S).toFixed(2)} > 1/e = ${(1/P.e).toFixed(2)} — Attack B structurally impossible`);
+  const bSuppressed=P.tau>P.S/P.e;
+  if(bSuppressed) warns.push(`ℹ τ/S = ${(P.tau/P.S).toFixed(2)} > 1/e = ${(1/P.e).toFixed(2)} — Attack B exponentially suppressed (P_B ≤ Bin(S,1/e) tail)`);
   const w=document.getElementById('warn');
   if(warns.length){w.style.display='block';w.innerHTML=warns.join('<br>');}
   else{w.style.display='none';}

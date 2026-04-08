@@ -40,7 +40,7 @@ Encoding    Budget    Dispersal         Per-subnet    Sampling    Validator
 | --- | --- | --- |
 | Attack A crossover | (1-tau/S)^{1/t} | p_d where expected failures = failure budget |
 | Attack B feasibility | 1-(1-1/e)^{1/R} | Min p_d for adversary to populate K subnetworks |
-| Attack B impossibility | tau > S/e | P_B = 0 for all p_d when tau/S > 1/e |
+| Attack B suppression | tau > S/e | P_B exponentially suppressed; bounded by Bin(S, 1/e) tail |
 | Global recovery | (1-1/e)^{1/R} | Hard threshold for data recoverability |
 
 ---
@@ -50,7 +50,7 @@ Encoding    Budget    Dispersal         Per-subnet    Sampling    Validator
 - **tau = S** is the worst setting for Attack A (only 1 failure needed)
 - **q_A = p_d^t** is R-independent under binomial approximation
 - **R is primary for Attack B**, not Attack A
-- **tau > S/e makes Attack B impossible** (structural bound)
+- **tau > S/e exponentially suppresses Attack B** — P_B is nonzero but bounded by P(Bin(S,1/e) ≥ tau), which drops rapidly as tau exceeds S/e
 - **Attack B feasibility threshold** is much lower than global recovery threshold
 
 ---
